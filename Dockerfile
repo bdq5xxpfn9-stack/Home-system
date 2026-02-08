@@ -2,13 +2,12 @@ FROM node:20-bullseye-slim
 
 WORKDIR /app
 
-ENV NODE_ENV=production
-
 COPY . .
 
 RUN cd client && npm install && npm run build
-RUN cd server && npm install
+RUN cd server && npm install --omit=dev
 
+ENV NODE_ENV=production
 ENV PORT=8080
 EXPOSE 8080
 

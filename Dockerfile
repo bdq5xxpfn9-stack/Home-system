@@ -5,9 +5,7 @@ WORKDIR /app
 COPY . .
 
 # Ensure devDependencies (Vite) are installed during build
-ENV NPM_CONFIG_PRODUCTION=false
-
-RUN cd client && npm install && npm run build
+RUN cd client && npm install --include=dev && npm run build
 RUN cd server && npm install --omit=dev
 
 ENV NODE_ENV=production

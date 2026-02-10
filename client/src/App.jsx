@@ -87,9 +87,9 @@ export default function App() {
   }, [session]);
 
   useEffect(() => {
-    document.body.classList.toggle('no-orbs', !session);
+    document.body.classList.toggle('logged-in', !!session);
     return () => {
-      document.body.classList.remove('no-orbs');
+      document.body.classList.remove('logged-in');
     };
   }, [session]);
 

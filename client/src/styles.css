@@ -28,7 +28,7 @@ body {
   overflow-x: hidden;
 }
 
-body::before {
+body.logged-in::before {
   content: '';
   position: fixed;
   top: -260px;
@@ -41,7 +41,7 @@ body::before {
   z-index: 0;
 }
 
-body::after {
+body.logged-in::after {
   content: '';
   position: fixed;
   bottom: -260px;
@@ -52,11 +52,6 @@ body::after {
   background: radial-gradient(circle at 35% 35%, #c6d7ff 0%, #7aa8ff 55%, #4f86ff 100%);
   opacity: 0.75;
   z-index: 0;
-}
-
-body.no-orbs::before,
-body.no-orbs::after {
-  display: none;
 }
 
 a {
@@ -380,6 +375,8 @@ textarea {
   border: 1px solid var(--border);
   border-radius: 22px;
   box-shadow: 0 24px 50px var(--shadow);
+  position: relative;
+  z-index: 1;
 }
 
 .login h1 {

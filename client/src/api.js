@@ -1,5 +1,5 @@
-const envBase = import.meta.env.VITE_API_BASE;
-const API_BASE = envBase !== undefined ? envBase : import.meta.env.PROD ? '' : 'http://localhost:5174';
+const isProd = import.meta.env.PROD;
+const API_BASE = isProd ? '' : import.meta.env.VITE_API_BASE || 'http://localhost:5174';
 
 async function request(path, options = {}) {
   const res = await fetch(`${API_BASE}${path}`, {

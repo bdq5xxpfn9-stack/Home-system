@@ -38,6 +38,7 @@ import { loadSession, saveSession, clearSession } from './storage.js';
 
 const VIEWS = [
   { id: 'today', label: 'Heute' },
+  { id: 'family', label: 'Familie' },
   { id: 'week', label: 'Woche' },
   { id: 'tasks', label: 'Aufgaben' },
   { id: 'lists', label: 'Listen' },
@@ -83,6 +84,13 @@ export default function App() {
   useEffect(() => {
     if (!session) return;
     refreshAll();
+  }, [session]);
+
+  useEffect(() => {
+    document.body.classList.toggle('no-orbs', !session);
+    return () => {
+      document.body.classList.remove('no-orbs');
+    };
   }, [session]);
 
   const currentMember = useMemo(
@@ -365,13 +373,15 @@ export default function App() {
     }
   }
 
-  async function handleTransferTask(task) {
+  async function handleTransferTask(task, options = {}) {
     if (!session) return;
     setActionNotice('');
     try {
       const res = await transferTask(task.id, { fromMemberId: session.memberId });
       setTasks((prev) => prev.map((item) => (item.id === task.id ? res.task : item)));
-      setActiveTask(res.task);
+      if (options.openModal) {
+        setActiveTask(res.task);
+      }
       setActionNotice('Aufgabe wurde übertragen.');
     } catch (err) {
       setActionNotice(err.message);
@@ -406,6 +416,23 @@ export default function App() {
   const unassignedTasks = tasksDueToday.filter(
     (task) => !task.primary_member_id && !task.secondary_member_id
   );
+
+  const myTasksToday = session
+    ? tasksDueToday.filter(
+        (task) =>
+          task.primary_member_id === session.memberId || task.secondary_member_id === session.memberId
+      )
+    : tasksDueToday;
+
+  const otherMembers = session
+    ? members.filter((member) => member.id !== session.memberId)
+    : members;
+  const tasksByOtherMembers = otherMembers.map((member) => ({
+    member,
+    tasks: tasksDueToday.filter(
+      (task) => task.primary_member_id === member.id || task.secondary_member_id === member.id
+    )
+  }));
 
   if (!session) {
     return (
@@ -468,19 +495,19 @@ export default function App() {
       {error && <p className="notice">{error}</p>}
 
       {view === 'today' && (
-        <div className="section hero">
+        <div className="section hero hero-clear">
           <div className="hero-header">
             <div>
               <h2>
                 {getGreeting()} {currentMember ? `, ${currentMember.name}` : ''}
               </h2>
-              <p className="notice">Heute stehen {tasksDueToday.length} Aufgaben an.</p>
+              <p className="notice">Heute stehen {myTasksToday.length} Aufgaben an.</p>
             </div>
           </div>
-          {tasksDueToday.length === 0 && <p className="notice">Für heute ist alles erledigt.</p>}
-          {tasksDueToday.length > 0 && (
+          {myTasksToday.length === 0 && <p className="notice">Für heute ist alles erledigt.</p>}
+          {myTasksToday.length > 0 && (
             <div className="bubble-cloud">
-              {tasksDueToday.map((task, index) => {
+              {myTasksToday.map((task, index) => {
                 const bubble = getBubbleStyle(task, index, today);
                 const assigned = getAssignedNames(task, members);
                 return (
@@ -503,6 +530,51 @@ export default function App() {
           {unassignedTasks.length > 0 && (
             <p className="notice">Ohne Zuordnung: {unassignedTasks.length} Aufgaben.</p>
           )}
+        </div>
+      )}
+
+      {view === 'family' && (
+        <div className="section">
+          <h2>Familie – Heute</h2>
+          {actionNotice && <p className="notice">{actionNotice}</p>}
+          <div className="grid">
+            {tasksByOtherMembers.map(({ member, tasks }) => (
+              <div className="card" key={member.id}>
+                <h3>
+                  <span className="badge" style={{ background: member.color || '#ddd' }}>
+                    {member.name}
+                  </span>
+                </h3>
+                {tasks.length === 0 && <p className="notice">Keine Aufgaben fällig.</p>}
+                {tasks.map((task) => (
+                  <TaskRow
+                    key={task.id}
+                    task={task}
+                    members={members}
+                    onComplete={handleCompleteTask}
+                    onDelete={handleDeleteTask}
+                    onNudge={() => handleNudgeTask(task)}
+                    onTransfer={() => handleTransferTask(task)}
+                  />
+                ))}
+              </div>
+            ))}
+            <div className="card">
+              <h3>Ohne Zuordnung</h3>
+              {unassignedTasks.length === 0 && <p className="notice">Alles zugewiesen.</p>}
+              {unassignedTasks.map((task) => (
+                <TaskRow
+                  key={task.id}
+                  task={task}
+                  members={members}
+                  onComplete={handleCompleteTask}
+                  onDelete={handleDeleteTask}
+                  onNudge={() => handleNudgeTask(task)}
+                  onTransfer={() => handleTransferTask(task)}
+                />
+              ))}
+            </div>
+          </div>
         </div>
       )}
 
@@ -743,7 +815,7 @@ export default function App() {
               </button>
               <button
                 className="button secondary"
-                onClick={() => handleTransferTask(activeTask)}
+                onClick={() => handleTransferTask(activeTask, { openModal: true })}
                 disabled={!activeTask.secondary_member_id}
                 title={
                   activeTask.secondary_member_id
@@ -764,7 +836,7 @@ export default function App() {
   );
 }
 
-function TaskRow({ task, members, onComplete, onDelete, showNotes }) {
+function TaskRow({ task, members, onComplete, onDelete, onNudge, onTransfer, showNotes }) {
   const memberNames = members
     .filter((member) => member.id === task.primary_member_id || member.id === task.secondary_member_id)
     .map((member) => member.name)
@@ -790,6 +862,20 @@ function TaskRow({ task, members, onComplete, onDelete, showNotes }) {
         <button className="button secondary" onClick={() => onComplete(task.id)}>
           Erledigt
         </button>
+        {onNudge && (
+          <button className="button secondary" onClick={onNudge}>
+            Anstupsen
+          </button>
+        )}
+        {onTransfer && (
+          <button
+            className="button secondary"
+            onClick={onTransfer}
+            disabled={!task.secondary_member_id}
+          >
+            Übertragen
+          </button>
+        )}
         <button className="button ghost" onClick={() => onDelete(task.id)}>
           Entfernen
         </button>

@@ -2,16 +2,16 @@
 
 :root {
   color-scheme: light;
-  --bg: #f5f3ee;
-  --bg-accent: #ece7dc;
-  --ink: #111111;
-  --muted: #6b6b6b;
-  --border: #d6d0c7;
-  --accent: #1f2937;
-  --accent-soft: #dcd6cb;
-  --success: #1b7f5f;
-  --danger: #b42318;
-  --shadow: rgba(17, 17, 17, 0.08);
+  --bg: #f4f7ff;
+  --bg-accent: #e8efff;
+  --ink: #0f172a;
+  --muted: #64748b;
+  --border: #d9e2f3;
+  --accent: #2a6dfc;
+  --accent-soft: #dbe6ff;
+  --success: #1f8f6a;
+  --danger: #c2410c;
+  --shadow: rgba(30, 64, 175, 0.12);
 }
 
 * {
@@ -21,9 +21,24 @@
 body {
   margin: 0;
   font-family: 'Space Grotesk', system-ui, sans-serif;
-  background: radial-gradient(circle at top left, #ffffff 0%, var(--bg) 48%, var(--bg-accent) 100%);
+  background: linear-gradient(180deg, #f7faff 0%, var(--bg) 45%, var(--bg-accent) 100%);
   color: var(--ink);
   min-height: 100vh;
+  position: relative;
+  overflow-x: hidden;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  top: -260px;
+  right: -160px;
+  width: 560px;
+  height: 560px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #7fb0ff 0%, #3f7bff 55%, #2a6dfc 100%);
+  opacity: 0.95;
+  z-index: 0;
 }
 
 a {
@@ -43,6 +58,8 @@ textarea {
   max-width: 1100px;
   margin: 0 auto;
   padding: 32px 24px 80px;
+  position: relative;
+  z-index: 1;
 }
 
 .header {
@@ -81,25 +98,26 @@ textarea {
 .tab {
   padding: 8px 14px;
   border-radius: 999px;
-  border: 1px solid var(--border);
-  background: transparent;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.7);
   color: var(--muted);
   cursor: pointer;
   transition: all 0.2s ease;
+  box-shadow: 0 8px 20px rgba(42, 109, 252, 0.08);
 }
 
 .tab.active {
   background: var(--accent);
-  color: #fefcf9;
+  color: #ffffff;
   border-color: var(--accent);
 }
 
 .section {
   background: #fff;
   border: 1px solid var(--border);
-  border-radius: 18px;
+  border-radius: 20px;
   padding: 20px;
-  box-shadow: 0 16px 40px var(--shadow);
+  box-shadow: 0 18px 40px var(--shadow);
   margin-bottom: 20px;
 }
 
@@ -116,9 +134,9 @@ textarea {
 
 .card {
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: 18px;
   padding: 16px;
-  background: var(--bg);
+  background: #f9fbff;
 }
 
 .card h3 {
@@ -159,10 +177,10 @@ textarea {
   align-items: center;
   gap: 6px;
   font-size: 0.75rem;
-  padding: 3px 8px;
+  padding: 4px 10px;
   border-radius: 999px;
   background: var(--accent-soft);
-  color: var(--ink);
+  color: #0f172a;
 }
 
 .badge.overdue {
@@ -172,18 +190,20 @@ textarea {
 
 .button {
   border: none;
-  border-radius: 12px;
-  padding: 8px 14px;
+  border-radius: 999px;
+  padding: 9px 16px;
   background: var(--accent);
   color: #fff;
   cursor: pointer;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: 0 10px 20px rgba(42, 109, 252, 0.18);
 }
 
 .button.secondary {
-  background: transparent;
+  background: #ffffff;
   color: var(--ink);
   border: 1px solid var(--border);
+  box-shadow: none;
 }
 
 .button.ghost {
@@ -243,7 +263,7 @@ textarea {
 .check {
   width: 18px;
   height: 18px;
-  border-radius: 4px;
+  border-radius: 6px;
   border: 2px solid var(--accent);
   display: grid;
   place-items: center;
@@ -267,8 +287,8 @@ textarea {
   padding: 28px;
   background: #fff;
   border: 1px solid var(--border);
-  border-radius: 20px;
-  box-shadow: 0 20px 40px var(--shadow);
+  border-radius: 22px;
+  box-shadow: 0 24px 50px var(--shadow);
 }
 
 .login h1 {

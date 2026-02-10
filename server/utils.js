@@ -1,14 +1,16 @@
 import { DateTime } from 'luxon';
 
-const COLORS = [
-  '#1f2937',
-  '#0f766e',
-  '#b45309',
-  '#7c3aed',
-  '#be123c',
-  '#1d4ed8',
-  '#15803d',
-  '#c2410c'
+export const PASTEL_COLORS = [
+  '#9bb4ff',
+  '#9ee7e5',
+  '#f7c8a6',
+  '#f6a6b2',
+  '#c9c3ff',
+  '#b8e4b0',
+  '#ffd59e',
+  '#b6d7ff',
+  '#f3b0ff',
+  '#a7e0ff'
 ];
 
 export function randomColor(seed = '') {
@@ -17,8 +19,8 @@ export function randomColor(seed = '') {
     hash = (hash << 5) - hash + seed.charCodeAt(i);
     hash |= 0;
   }
-  const index = Math.abs(hash) % COLORS.length;
-  return COLORS[index];
+  const index = Math.abs(hash) % PASTEL_COLORS.length;
+  return PASTEL_COLORS[index];
 }
 
 export function todayISO(timezone = 'Europe/Zurich') {

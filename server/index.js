@@ -6,7 +6,7 @@ import { DateTime } from 'luxon';
 import cron from 'node-cron';
 import webpush from 'web-push';
 import { db, nowISO } from './db.js';
-import { nextDueDate, randomColor, todayISO } from './utils.js';
+import { nextDueDate, randomColor, todayISO, PASTEL_COLORS } from './utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,6 +33,20 @@ function getMember(id) {
 
 function sendJson(res, status, payload) {
   res.status(status).json(payload);
+}
+
+function pickMemberColor(householdId, seed = '') {
+  const used = db
+    .prepare('SELECT color FROM members WHERE household_id = ?')
+    .all(householdId)
+    .map((row) => row.color)
+    .filter(Boolean);
+  const usedSet = new Set(used);
+  const available = PASTEL_COLORS.filter((color) => !usedSet.has(color));
+  if (available.length > 0) {
+    return available[0];
+  }
+  return randomColor(seed);
 }
 
 app.get('/api/health', (req, res) => {
@@ -76,11 +90,12 @@ app.post('/api/households/join', (req, res) => {
   let member = existingMember;
   if (!member) {
     const createdAt = nowISO();
+    const color = pickMemberColor(household.id, memberName);
     const memberInfo = db
       .prepare(
         'INSERT INTO members (household_id, name, color, created_at) VALUES (?, ?, ?, ?)'
       )
-      .run(household.id, memberName, randomColor(memberName), createdAt);
+      .run(household.id, memberName, color, createdAt);
     member = getMember(memberInfo.lastInsertRowid);
   }
 
@@ -118,11 +133,33 @@ app.post('/api/households/:id/members', (req, res) => {
   }
 
   const createdAt = nowISO();
+  const color = pickMemberColor(household.id, name);
   const info = db
     .prepare('INSERT INTO members (household_id, name, color, created_at) VALUES (?, ?, ?, ?)')
-    .run(household.id, name, randomColor(name), createdAt);
+    .run(household.id, name, color, createdAt);
   const member = getMember(info.lastInsertRowid);
   return sendJson(res, 200, { member });
+});
+
+app.post('/api/households/:id/reset-colors', (req, res) => {
+  const household = getHousehold(req.params.id);
+  if (!household) {
+    return sendJson(res, 404, { error: 'Household not found.' });
+  }
+
+  const members = db
+    .prepare('SELECT * FROM members WHERE household_id = ? ORDER BY name ASC')
+    .all(household.id);
+
+  members.forEach((member, index) => {
+    const color = PASTEL_COLORS[index % PASTEL_COLORS.length];
+    db.prepare('UPDATE members SET color = ? WHERE id = ?').run(color, member.id);
+  });
+
+  const updated = db
+    .prepare('SELECT * FROM members WHERE household_id = ? ORDER BY name ASC')
+    .all(household.id);
+  return sendJson(res, 200, { members: updated });
 });
 
 app.delete('/api/members/:id', (req, res) => {

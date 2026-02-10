@@ -35,6 +35,12 @@ export function addMember(householdId, payload) {
   });
 }
 
+export function resetMemberColors(householdId) {
+  return request(`/api/households/${householdId}/reset-colors`, {
+    method: 'POST'
+  });
+}
+
 export function deleteMember(memberId) {
   return request(`/api/members/${memberId}`, {
     method: 'DELETE'

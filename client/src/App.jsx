@@ -10,6 +10,7 @@ import {
   deleteTask,
   addMember,
   deleteMember,
+  resetMemberColors,
   createList,
   createListItem,
   updateListItem,
@@ -228,6 +229,16 @@ export default function App() {
           return task;
         })
       );
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleResetColors() {
+    if (!session) return;
+    try {
+      const res = await resetMemberColors(session.householdId);
+      setMembers(res.members);
     } catch (err) {
       setError(err.message);
     }
@@ -630,6 +641,9 @@ export default function App() {
                   )}
                 </div>
               ))}
+              <button className="button secondary" onClick={handleResetColors}>
+                Pastellfarben neu setzen
+              </button>
               <form className="form" onSubmit={handleAddMember}>
                 <div className="field">
                   <label>Neues Mitglied</label>

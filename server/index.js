@@ -49,6 +49,21 @@ function pickMemberColor(householdId, seed = '') {
   return randomColor(seed);
 }
 
+function clearHouseholdData(householdId) {
+  db.prepare(
+    'DELETE FROM task_completions WHERE task_id IN (SELECT id FROM tasks WHERE household_id = ?)'
+  ).run(householdId);
+  db.prepare('DELETE FROM tasks WHERE household_id = ?').run(householdId);
+  db.prepare(
+    'DELETE FROM list_items WHERE list_id IN (SELECT id FROM lists WHERE household_id = ?)'
+  ).run(householdId);
+  db.prepare('DELETE FROM lists WHERE household_id = ?').run(householdId);
+  db.prepare(
+    'DELETE FROM push_subscriptions WHERE member_id IN (SELECT id FROM members WHERE household_id = ?)'
+  ).run(householdId);
+  db.prepare('DELETE FROM members WHERE household_id = ?').run(householdId);
+}
+
 app.get('/api/health', (req, res) => {
   sendJson(res, 200, { status: 'ok' });
 });
@@ -100,6 +115,177 @@ app.post('/api/households/join', (req, res) => {
   }
 
   return sendJson(res, 200, { household, member });
+});
+
+app.get('/api/admin/export', (req, res) => {
+  const { accessCode } = req.query || {};
+  if (!accessCode) {
+    return sendJson(res, 400, { error: 'Access code required.' });
+  }
+
+  const household = db.prepare('SELECT * FROM households WHERE access_code = ?').get(accessCode);
+  if (!household) {
+    return sendJson(res, 404, { error: 'Household not found.' });
+  }
+
+  const members = db
+    .prepare('SELECT * FROM members WHERE household_id = ? ORDER BY id ASC')
+    .all(household.id);
+  const tasks = db
+    .prepare('SELECT * FROM tasks WHERE household_id = ? ORDER BY id ASC')
+    .all(household.id);
+  const completions = db
+    .prepare(
+      'SELECT tc.* FROM task_completions tc INNER JOIN tasks t ON t.id = tc.task_id WHERE t.household_id = ?'
+    )
+    .all(household.id);
+  const lists = db
+    .prepare('SELECT * FROM lists WHERE household_id = ? ORDER BY id ASC')
+    .all(household.id);
+  const listItems = db
+    .prepare(
+      'SELECT li.* FROM list_items li INNER JOIN lists l ON l.id = li.list_id WHERE l.household_id = ?'
+    )
+    .all(household.id);
+
+  return sendJson(res, 200, {
+    version: 1,
+    exportedAt: nowISO(),
+    household: {
+      name: household.name,
+      access_code: household.access_code,
+      timezone: household.timezone,
+      locale: household.locale
+    },
+    members,
+    tasks,
+    task_completions: completions,
+    lists,
+    list_items: listItems
+  });
+});
+
+app.post('/api/admin/import', (req, res) => {
+  const { accessCode, mode, data } = req.body || {};
+  if (!accessCode || !data) {
+    return sendJson(res, 400, { error: 'Access code and data required.' });
+  }
+
+  const importMode = mode === 'merge' ? 'merge' : 'replace';
+  const payload = data.household ? data : { household: {}, ...data };
+
+  let household = db.prepare('SELECT * FROM households WHERE access_code = ?').get(accessCode);
+  if (!household) {
+    const createdAt = nowISO();
+    const info = db
+      .prepare(
+        'INSERT INTO households (name, access_code, timezone, locale, created_at) VALUES (?, ?, ?, ?, ?)'
+      )
+      .run(
+        payload.household?.name || 'Haushalt',
+        accessCode,
+        payload.household?.timezone || 'Europe/Zurich',
+        payload.household?.locale || 'de-CH',
+        createdAt
+      );
+    household = getHousehold(info.lastInsertRowid);
+  }
+
+  if (importMode === 'replace') {
+    clearHouseholdData(household.id);
+    db.prepare('UPDATE households SET name = ?, timezone = ?, locale = ? WHERE id = ?').run(
+      payload.household?.name || household.name,
+      payload.household?.timezone || household.timezone,
+      payload.household?.locale || household.locale,
+      household.id
+    );
+  }
+
+  const memberIdMap = new Map();
+  const existingMembers = db
+    .prepare('SELECT * FROM members WHERE household_id = ?')
+    .all(household.id);
+  const existingByName = new Map(
+    existingMembers.map((member) => [member.name.toLowerCase(), member])
+  );
+
+  for (const member of payload.members || []) {
+    const existing = existingByName.get(String(member.name || '').toLowerCase());
+    if (existing) {
+      memberIdMap.set(member.id, existing.id);
+      continue;
+    }
+    const createdAt = member.created_at || nowISO();
+    const info = db
+      .prepare('INSERT INTO members (household_id, name, color, created_at) VALUES (?, ?, ?, ?)')
+      .run(
+        household.id,
+        member.name,
+        member.color || pickMemberColor(household.id, member.name),
+        createdAt
+      );
+    memberIdMap.set(member.id, info.lastInsertRowid);
+  }
+
+  const taskIdMap = new Map();
+  for (const task of payload.tasks || []) {
+    const info = db
+      .prepare(
+        `INSERT INTO tasks
+          (household_id, title, notes, recurrence, due_date, primary_member_id, secondary_member_id, transferred_from_member_id, transferred_at, created_at, active)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        household.id,
+        task.title,
+        task.notes || null,
+        task.recurrence,
+        task.due_date,
+        memberIdMap.get(task.primary_member_id) || null,
+        memberIdMap.get(task.secondary_member_id) || null,
+        memberIdMap.get(task.transferred_from_member_id) || null,
+        task.transferred_at || null,
+        task.created_at || nowISO(),
+        typeof task.active === 'number' ? task.active : 1
+      );
+    taskIdMap.set(task.id, info.lastInsertRowid);
+  }
+
+  for (const completion of payload.task_completions || []) {
+    const mappedTaskId = taskIdMap.get(completion.task_id);
+    if (!mappedTaskId) continue;
+    db.prepare(
+      'INSERT INTO task_completions (task_id, completed_at, completed_by_member_id) VALUES (?, ?, ?)'
+    ).run(
+      mappedTaskId,
+      completion.completed_at,
+      memberIdMap.get(completion.completed_by_member_id) || null
+    );
+  }
+
+  const listIdMap = new Map();
+  for (const list of payload.lists || []) {
+    const info = db
+      .prepare('INSERT INTO lists (household_id, title, type, created_at) VALUES (?, ?, ?, ?)')
+      .run(household.id, list.title, list.type || null, list.created_at || nowISO());
+    listIdMap.set(list.id, info.lastInsertRowid);
+  }
+
+  for (const item of payload.list_items || []) {
+    const mappedListId = listIdMap.get(item.list_id);
+    if (!mappedListId) continue;
+    db.prepare(
+      'INSERT INTO list_items (list_id, text, done, created_at, done_at) VALUES (?, ?, ?, ?, ?)'
+    ).run(
+      mappedListId,
+      item.text,
+      typeof item.done === 'number' ? item.done : 0,
+      item.created_at || nowISO(),
+      item.done_at || null
+    );
+  }
+
+  return sendJson(res, 200, { ok: true });
 });
 
 app.get('/api/households/:id/members', (req, res) => {
@@ -313,16 +499,17 @@ app.post('/api/tasks/:id/transfer', async (req, res) => {
 
   const updated = db.prepare('SELECT * FROM tasks WHERE id = ?').get(task.id);
 
+  let pushResult = { sent: 0, failed: 0, configured: false };
   if (newPrimary && newPrimary !== fromMemberId) {
     const fromMember = fromMemberId ? getMember(fromMemberId) : null;
     const senderName = fromMember ? fromMember.name : 'Jemand';
-    await sendPushToMember(newPrimary, {
+    pushResult = await sendPushToMember(newPrimary, {
       title: 'Aufgabe übertragen',
       body: `${senderName} hat dir die Aufgabe „${updated.title}“ übertragen.`
     });
   }
 
-  return sendJson(res, 200, { task: updated });
+  return sendJson(res, 200, { task: updated, push: pushResult });
 });
 
 app.post('/api/tasks/:id/nudge', async (req, res) => {
@@ -340,14 +527,19 @@ app.post('/api/tasks/:id/nudge', async (req, res) => {
   );
 
   let sent = 0;
+  let failed = 0;
+  let configured = false;
   for (const targetId of targets) {
-    sent += await sendPushToMember(targetId, {
+    const result = await sendPushToMember(targetId, {
       title: 'Erinnerung',
       body: `${senderName} erinnert dich an: ${task.title}`
     });
+    sent += result.sent;
+    failed += result.failed;
+    configured = configured || result.configured;
   }
 
-  return sendJson(res, 200, { sent });
+  return sendJson(res, 200, { sent, failed, configured });
 });
 
 app.delete('/api/tasks/:id', (req, res) => {
@@ -499,17 +691,18 @@ app.post('/api/members/:id/push-test', async (req, res) => {
     return sendJson(res, 404, { error: 'Member not found.' });
   }
 
-  const sent = await sendPushToMember(member.id, {
+  const result = await sendPushToMember(member.id, {
     title: 'Familienplan',
     body: 'Push-Benachrichtigungen sind aktiv.'
   });
 
-  return sendJson(res, 200, { sent });
+  return sendJson(res, 200, result);
 });
 
 async function sendPushToMember(memberId, payload) {
-  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
-    return 0;
+  const configured = Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY);
+  if (!configured) {
+    return { sent: 0, failed: 0, configured: false };
   }
 
   const subs = db
@@ -517,6 +710,7 @@ async function sendPushToMember(memberId, payload) {
     .all(memberId);
 
   let sent = 0;
+  let failed = 0;
   for (const sub of subs) {
     try {
       await webpush.sendNotification(JSON.parse(sub.subscription_json), JSON.stringify(payload));
@@ -524,11 +718,14 @@ async function sendPushToMember(memberId, payload) {
     } catch (err) {
       if (err.statusCode === 404 || err.statusCode === 410) {
         db.prepare('DELETE FROM push_subscriptions WHERE id = ?').run(sub.id);
+      } else {
+        failed += 1;
+        console.error('Push send failed', err?.statusCode || '', err?.body || err?.message || err);
       }
     }
   }
 
-  return sent;
+  return { sent, failed, configured: true };
 }
 
 async function sendDailyReminders() {

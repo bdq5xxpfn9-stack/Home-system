@@ -18,6 +18,8 @@ import {
   updateListItem,
   deleteListItem,
   deleteList,
+  exportHousehold,
+  importHousehold,
   fetchPushPublicKey,
   savePushSubscription,
   sendPushTest
@@ -77,6 +79,8 @@ export default function App() {
   const [notice, setNotice] = useState('');
   const [actionNotice, setActionNotice] = useState('');
   const [activeTask, setActiveTask] = useState(null);
+  const [dataNotice, setDataNotice] = useState('');
+  const [importFile, setImportFile] = useState(null);
 
   const today = todayISO();
   const week = weekRange(today);
@@ -366,10 +370,55 @@ export default function App() {
       }
 
       await savePushSubscription(session.memberId, subscription);
-      await sendPushTest(session.memberId);
-      setNotice('Push-Benachrichtigungen sind aktiviert.');
+      const result = await sendPushTest(session.memberId);
+      if (!result.configured) {
+        setNotice('Push ist auf dem Server noch nicht konfiguriert.');
+      } else if (result.sent > 0) {
+        setNotice('Push-Benachrichtigungen sind aktiviert.');
+      } else if (result.failed > 0) {
+        setNotice('Push konnte nicht zugestellt werden. Bitte iOS-Mitteilungen prüfen.');
+      } else {
+        setNotice('Keine Push-Geräte gefunden. Bitte App neu öffnen und erneut aktivieren.');
+      }
     } catch (err) {
       setNotice('Push konnte nicht aktiviert werden.');
+    }
+  }
+
+  async function handleExport() {
+    if (!session) return;
+    setDataNotice('');
+    try {
+      const data = await exportHousehold(session.accessCode);
+      const blob = new Blob([JSON.stringify(data, null, 2)], {
+        type: 'application/json'
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `familienplan-${session.accessCode}-${Date.now()}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setDataNotice('Export erstellt.');
+    } catch (err) {
+      setDataNotice(err.message);
+    }
+  }
+
+  async function handleImport() {
+    if (!session || !importFile) return;
+    setDataNotice('');
+    try {
+      const text = await importFile.text();
+      const data = JSON.parse(text);
+      await importHousehold(session.accessCode, data, 'replace');
+      setDataNotice('Daten importiert. Seite wird aktualisiert.');
+      setImportFile(null);
+      await refreshAll();
+    } catch (err) {
+      setDataNotice(err.message);
     }
   }
 
@@ -382,7 +431,15 @@ export default function App() {
       if (options.openModal) {
         setActiveTask(res.task);
       }
-      setActionNotice('Aufgabe wurde übertragen.');
+      if (res.push?.sent > 0) {
+        setActionNotice('Aufgabe wurde übertragen und die Person wurde informiert.');
+      } else if (res.push?.configured === false) {
+        setActionNotice('Aufgabe übertragen, aber Push ist nicht konfiguriert.');
+      } else if (res.push?.failed > 0) {
+        setActionNotice('Aufgabe übertragen, aber Push konnte nicht zugestellt werden.');
+      } else {
+        setActionNotice('Aufgabe wurde übertragen.');
+      }
     } catch (err) {
       setActionNotice(err.message);
     }
@@ -395,6 +452,10 @@ export default function App() {
       const res = await nudgeTask(task.id, { fromMemberId: session.memberId });
       if (res.sent > 0) {
         setActionNotice('Erinnerung wurde gesendet.');
+      } else if (res.configured === false) {
+        setActionNotice('Push ist nicht konfiguriert.');
+      } else if (res.failed > 0) {
+        setActionNotice('Push konnte nicht zugestellt werden.');
       } else {
         setActionNotice('Keine Push-Geräte gefunden.');
       }
@@ -778,6 +839,30 @@ export default function App() {
                 Push aktivieren
               </button>
               {notice && <p className="notice">{notice}</p>}
+            </div>
+            <div className="card">
+              <h3>Daten übertragen</h3>
+              <p className="notice">
+                Exportiere Daten vom alten Gerät (lokal) und importiere sie hier in die Cloud.
+                Beim Import werden die Cloud-Daten ersetzt.
+              </p>
+              <div className="row">
+                <button className="button secondary" onClick={handleExport}>
+                  Export erstellen
+                </button>
+              </div>
+              <div className="field" style={{ marginTop: '12px' }}>
+                <label>Import-Datei wählen (.json)</label>
+                <input
+                  type="file"
+                  accept="application/json"
+                  onChange={(event) => setImportFile(event.target.files?.[0] || null)}
+                />
+              </div>
+              <button className="button" onClick={handleImport} disabled={!importFile}>
+                Importieren
+              </button>
+              {dataNotice && <p className="notice">{dataNotice}</p>}
             </div>
             <div className="card">
               <h3>Haushalt</h3>

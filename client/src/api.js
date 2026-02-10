@@ -133,6 +133,17 @@ export function fetchPushPublicKey() {
   return request('/api/push/public-key');
 }
 
+export function exportHousehold(accessCode) {
+  return request(`/api/admin/export?accessCode=${encodeURIComponent(accessCode)}`);
+}
+
+export function importHousehold(accessCode, data, mode = 'replace') {
+  return request('/api/admin/import', {
+    method: 'POST',
+    body: JSON.stringify({ accessCode, mode, data })
+  });
+}
+
 export function savePushSubscription(memberId, subscription) {
   return request(`/api/members/${memberId}/push-subscription`, {
     method: 'POST',

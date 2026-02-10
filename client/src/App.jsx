@@ -7,6 +7,8 @@ import {
   fetchLists,
   createTask,
   completeTask,
+  transferTask,
+  nudgeTask,
   deleteTask,
   addMember,
   deleteMember,
@@ -72,6 +74,8 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [actionNotice, setActionNotice] = useState('');
+  const [activeTask, setActiveTask] = useState(null);
 
   const today = todayISO();
   const week = weekRange(today);
@@ -325,8 +329,14 @@ export default function App() {
   async function handleEnablePush() {
     setNotice('');
     if (!session) return;
+    const isStandalone =
+      window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-      setNotice('Push wird von diesem Gerät nicht unterstützt.');
+      setNotice(
+        isStandalone
+          ? 'Push wird von diesem Gerät nicht unterstützt.'
+          : 'Push funktioniert nur in der installierten App. Bitte über „Zum Home-Bildschirm“ installieren.'
+      );
       return;
     }
 
@@ -352,6 +362,34 @@ export default function App() {
       setNotice('Push-Benachrichtigungen sind aktiviert.');
     } catch (err) {
       setNotice('Push konnte nicht aktiviert werden.');
+    }
+  }
+
+  async function handleTransferTask(task) {
+    if (!session) return;
+    setActionNotice('');
+    try {
+      const res = await transferTask(task.id, { fromMemberId: session.memberId });
+      setTasks((prev) => prev.map((item) => (item.id === task.id ? res.task : item)));
+      setActiveTask(res.task);
+      setActionNotice('Aufgabe wurde übertragen.');
+    } catch (err) {
+      setActionNotice(err.message);
+    }
+  }
+
+  async function handleNudgeTask(task) {
+    if (!session) return;
+    setActionNotice('');
+    try {
+      const res = await nudgeTask(task.id, { fromMemberId: session.memberId });
+      if (res.sent > 0) {
+        setActionNotice('Erinnerung wurde gesendet.');
+      } else {
+        setActionNotice('Keine Push-Geräte gefunden.');
+      }
+    } catch (err) {
+      setActionNotice(err.message);
     }
   }
 
@@ -430,42 +468,41 @@ export default function App() {
       {error && <p className="notice">{error}</p>}
 
       {view === 'today' && (
-        <div className="section">
-          <h2>Heute</h2>
-          <div className="grid">
-            {tasksByMember.map(({ member, tasks }) => (
-              <div className="card" key={member.id}>
-                <h3>
-                  <span className="badge" style={{ background: member.color || '#ddd' }}>
-                    {member.name}
-                  </span>
-                </h3>
-                {tasks.length === 0 && <p className="notice">Keine Aufgaben fällig.</p>}
-                {tasks.map((task) => (
-                  <TaskRow
-                    key={task.id}
-                    task={task}
-                    members={members}
-                    onComplete={handleCompleteTask}
-                    onDelete={handleDeleteTask}
-                  />
-                ))}
-              </div>
-            ))}
-            <div className="card">
-              <h3>Ohne Zuordnung</h3>
-              {unassignedTasks.length === 0 && <p className="notice">Alles zugewiesen.</p>}
-              {unassignedTasks.map((task) => (
-                <TaskRow
-                  key={task.id}
-                  task={task}
-                  members={members}
-                  onComplete={handleCompleteTask}
-                  onDelete={handleDeleteTask}
-                />
-              ))}
+        <div className="section hero">
+          <div className="hero-header">
+            <div>
+              <h2>
+                {getGreeting()} {currentMember ? `, ${currentMember.name}` : ''}
+              </h2>
+              <p className="notice">Heute stehen {tasksDueToday.length} Aufgaben an.</p>
             </div>
           </div>
+          {tasksDueToday.length === 0 && <p className="notice">Für heute ist alles erledigt.</p>}
+          {tasksDueToday.length > 0 && (
+            <div className="bubble-cloud">
+              {tasksDueToday.map((task, index) => {
+                const bubble = getBubbleStyle(task, index, today);
+                const assigned = getAssignedNames(task, members);
+                return (
+                  <button
+                    key={task.id}
+                    className="bubble"
+                    style={bubble}
+                    onClick={() => {
+                      setActiveTask(task);
+                      setActionNotice('');
+                    }}
+                  >
+                    <span className="bubble-title">{task.title}</span>
+                    {assigned && <span className="bubble-meta">{assigned}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {unassignedTasks.length > 0 && (
+            <p className="notice">Ohne Zuordnung: {unassignedTasks.length} Aufgaben.</p>
+          )}
         </div>
       )}
 
@@ -657,7 +694,8 @@ export default function App() {
             <div className="card">
               <h3>Push-Benachrichtigungen</h3>
               <p className="notice">
-                Aktiviert Push für dieses Gerät. Tägliche Erinnerungen werden um 07:00 Uhr gesendet.
+                Push funktioniert nur in der installierten App (Home-Bildschirm). Tägliche
+                Erinnerungen werden um 07:00 Uhr gesendet.
               </p>
               <button className="button" onClick={handleEnablePush}>
                 Push aktivieren
@@ -671,6 +709,52 @@ export default function App() {
               </p>
               <p className="notice">Timezone: {TZ}</p>
             </div>
+          </div>
+        </div>
+      )}
+
+      {activeTask && (
+        <div
+          className="modal-backdrop"
+          onClick={() => {
+            setActiveTask(null);
+            setActionNotice('');
+          }}
+        >
+          <div className="modal" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-header">
+              <h3>{activeTask.title}</h3>
+              <button className="button ghost" onClick={() => setActiveTask(null)}>
+                Schließen
+              </button>
+            </div>
+            <p className="modal-meta">
+              {RECURRENCE_LABELS[activeTask.recurrence]} · fällig am{' '}
+              {formatDate(activeTask.due_date)}
+            </p>
+            <p className="modal-meta">Zuständig: {getAssignedNames(activeTask, members) || 'Offen'}</p>
+            {activeTask.notes && <p className="modal-notes">{activeTask.notes}</p>}
+            <div className="modal-actions">
+              <button className="button" onClick={() => handleCompleteTask(activeTask.id)}>
+                Erledigt
+              </button>
+              <button className="button secondary" onClick={() => handleNudgeTask(activeTask)}>
+                Anstupsen
+              </button>
+              <button
+                className="button secondary"
+                onClick={() => handleTransferTask(activeTask)}
+                disabled={!activeTask.secondary_member_id}
+                title={
+                  activeTask.secondary_member_id
+                    ? 'An Zweitperson übertragen'
+                    : 'Keine Zweitperson hinterlegt'
+                }
+              >
+                An Zweitperson übertragen
+              </button>
+            </div>
+            {actionNotice && <p className="notice">{actionNotice}</p>}
           </div>
         </div>
       )}
@@ -712,4 +796,39 @@ function TaskRow({ task, members, onComplete, onDelete, showNotes }) {
       </div>
     </div>
   );
+}
+
+function getAssignedNames(task, members) {
+  const names = members
+    .filter((member) => member.id === task.primary_member_id || member.id === task.secondary_member_id)
+    .map((member) => member.name);
+  return names.join(' & ');
+}
+
+function getGreeting() {
+  const hour = DateTime.now().setZone(TZ).hour;
+  if (hour < 5) return 'Gute Nacht';
+  if (hour < 11) return 'Guten Morgen';
+  if (hour < 17) return 'Guten Tag';
+  if (hour < 22) return 'Guten Abend';
+  return 'Gute Nacht';
+}
+
+function getBubbleStyle(task, index, today) {
+  const todayDate = DateTime.fromISO(today, { zone: TZ }).startOf('day');
+  const dueDate = DateTime.fromISO(task.due_date, { zone: TZ }).startOf('day');
+  const diffDays = Math.floor(dueDate.diff(todayDate, 'days').days);
+  const overdueDays = diffDays < 0 ? Math.abs(diffDays) : 0;
+  const intensity = Math.min(1, 0.45 + overdueDays * 0.18);
+  const size = 100 + intensity * 70;
+  const light = 90 - intensity * 25;
+  const deep = 80 - intensity * 28;
+  const delay = (index % 7) * 0.25;
+  return {
+    width: `${size}px`,
+    height: `${size}px`,
+    background: `radial-gradient(circle at 30% 30%, hsl(212, 100%, ${light}%), hsl(214, 90%, ${deep}%))`,
+    animationDelay: `${delay}s`,
+    animationDuration: `${5.5 + (index % 5)}s`
+  };
 }

@@ -283,6 +283,70 @@ app.post('/api/tasks/:id/complete', (req, res) => {
   return sendJson(res, 200, { task: updated });
 });
 
+app.post('/api/tasks/:id/transfer', async (req, res) => {
+  const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
+  if (!task) {
+    return sendJson(res, 404, { error: 'Task not found.' });
+  }
+
+  const { toMemberId, fromMemberId } = req.body || {};
+
+  let newPrimary = task.primary_member_id;
+  let newSecondary = task.secondary_member_id;
+
+  if (toMemberId) {
+    newSecondary = task.primary_member_id || null;
+    newPrimary = toMemberId;
+  } else if (task.secondary_member_id) {
+    newPrimary = task.secondary_member_id;
+    newSecondary = task.primary_member_id || null;
+  } else {
+    return sendJson(res, 400, { error: 'No secondary member to transfer to.' });
+  }
+
+  db.prepare(
+    'UPDATE tasks SET primary_member_id = ?, secondary_member_id = ? WHERE id = ?'
+  ).run(newPrimary, newSecondary, task.id);
+
+  const updated = db.prepare('SELECT * FROM tasks WHERE id = ?').get(task.id);
+
+  if (newPrimary && newPrimary !== fromMemberId) {
+    const fromMember = fromMemberId ? getMember(fromMemberId) : null;
+    const senderName = fromMember ? fromMember.name : 'Jemand';
+    await sendPushToMember(newPrimary, {
+      title: 'Aufgabe übertragen',
+      body: `${senderName} hat dir die Aufgabe „${updated.title}“ übertragen.`
+    });
+  }
+
+  return sendJson(res, 200, { task: updated });
+});
+
+app.post('/api/tasks/:id/nudge', async (req, res) => {
+  const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
+  if (!task) {
+    return sendJson(res, 404, { error: 'Task not found.' });
+  }
+
+  const { fromMemberId } = req.body || {};
+  const fromMember = fromMemberId ? getMember(fromMemberId) : null;
+  const senderName = fromMember ? fromMember.name : 'Jemand';
+
+  const targets = [task.primary_member_id, task.secondary_member_id].filter(
+    (id) => id && id !== fromMemberId
+  );
+
+  let sent = 0;
+  for (const targetId of targets) {
+    sent += await sendPushToMember(targetId, {
+      title: 'Erinnerung',
+      body: `${senderName} erinnert dich an: ${task.title}`
+    });
+  }
+
+  return sendJson(res, 200, { sent });
+});
+
 app.delete('/api/tasks/:id', (req, res) => {
   const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
   if (!task) {

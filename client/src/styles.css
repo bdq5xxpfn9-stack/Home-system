@@ -41,6 +41,19 @@ body::before {
   z-index: 0;
 }
 
+body::after {
+  content: '';
+  position: fixed;
+  bottom: -260px;
+  left: -120px;
+  width: 520px;
+  height: 520px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #c6d7ff 0%, #7aa8ff 55%, #4f86ff 100%);
+  opacity: 0.75;
+  z-index: 0;
+}
+
 a {
   color: inherit;
   text-decoration: none;
@@ -124,6 +137,72 @@ textarea {
 .section h2 {
   margin: 0 0 12px;
   font-size: 1.3rem;
+}
+
+.hero {
+  position: relative;
+  overflow: hidden;
+}
+
+.hero-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.bubble-cloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 0 6px;
+  min-height: 240px;
+}
+
+.bubble {
+  border: none;
+  border-radius: 50%;
+  color: #0f172a;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 12px;
+  cursor: pointer;
+  box-shadow: 0 18px 30px rgba(30, 64, 175, 0.2);
+  animation-name: floaty;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.bubble:hover {
+  transform: translateY(-6px) scale(1.02);
+  box-shadow: 0 22px 36px rgba(30, 64, 175, 0.25);
+}
+
+.bubble-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.bubble-meta {
+  margin-top: 6px;
+  font-size: 0.75rem;
+  color: rgba(15, 23, 42, 0.7);
+}
+
+@keyframes floaty {
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-12px);
+  }
 }
 
 .grid {
@@ -302,6 +381,58 @@ footer {
   color: var(--muted);
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 20;
+}
+
+.modal {
+  background: #ffffff;
+  border-radius: 22px;
+  padding: 20px;
+  max-width: 460px;
+  width: 100%;
+  box-shadow: 0 30px 60px rgba(30, 64, 175, 0.25);
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.modal-header h3 {
+  margin: 0;
+}
+
+.modal-meta {
+  margin: 6px 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.modal-notes {
+  background: #f1f5ff;
+  padding: 10px 12px;
+  border-radius: 12px;
+  margin: 10px 0 0;
+  color: #1e293b;
+}
+
+.modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
 @media (max-width: 720px) {
   .app {
     padding: 24px 16px 80px;
@@ -310,5 +441,9 @@ footer {
   .header {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .bubble-cloud {
+    gap: 12px;
   }
 }

@@ -72,6 +72,20 @@ export function completeTask(taskId, payload) {
   });
 }
 
+export function transferTask(taskId, payload) {
+  return request(`/api/tasks/${taskId}/transfer`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
+export function nudgeTask(taskId, payload) {
+  return request(`/api/tasks/${taskId}/nudge`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
 export function deleteTask(taskId) {
   return request(`/api/tasks/${taskId}`, {
     method: 'DELETE'

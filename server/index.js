@@ -203,8 +203,8 @@ app.post('/api/households/:id/tasks', (req, res) => {
   const info = db
     .prepare(
       `INSERT INTO tasks
-        (household_id, title, notes, recurrence, due_date, primary_member_id, secondary_member_id, created_at, active)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`
+        (household_id, title, notes, recurrence, due_date, primary_member_id, secondary_member_id, transferred_from_member_id, transferred_at, created_at, active)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, 1)`
     )
     .run(
       household.id,
@@ -276,7 +276,9 @@ app.post('/api/tasks/:id/complete', (req, res) => {
     db.prepare('UPDATE tasks SET active = 0 WHERE id = ?').run(task.id);
   } else {
     const nextDate = nextDueDate(completedAt, task.recurrence, timezone);
-    db.prepare('UPDATE tasks SET due_date = ? WHERE id = ?').run(nextDate, task.id);
+    db.prepare(
+      'UPDATE tasks SET due_date = ?, transferred_from_member_id = NULL, transferred_at = NULL WHERE id = ?'
+    ).run(nextDate, task.id);
   }
 
   const updated = db.prepare('SELECT * FROM tasks WHERE id = ?').get(task.id);
@@ -304,9 +306,10 @@ app.post('/api/tasks/:id/transfer', async (req, res) => {
     return sendJson(res, 400, { error: 'No secondary member to transfer to.' });
   }
 
+  const transferredFrom = task.primary_member_id || null;
   db.prepare(
-    'UPDATE tasks SET primary_member_id = ?, secondary_member_id = ? WHERE id = ?'
-  ).run(newPrimary, newSecondary, task.id);
+    'UPDATE tasks SET primary_member_id = ?, secondary_member_id = ?, transferred_from_member_id = ?, transferred_at = ? WHERE id = ?'
+  ).run(newPrimary, newSecondary, transferredFrom, nowISO(), task.id);
 
   const updated = db.prepare('SELECT * FROM tasks WHERE id = ?').get(task.id);
 
@@ -567,8 +570,8 @@ async function sendDailyReminders() {
 
       const body =
         memberTasks.length === 1
-          ? `Heute ist 1 Aufgabe fällig: ${memberTasks[0].title}`
-          : `Heute sind ${memberTasks.length} Aufgaben fällig.`;
+          ? `Hey ${member.name}, schau dir deine Aufgabe für heute an: ${memberTasks[0].title}`
+          : `Hey ${member.name}, schau dir an, was heute ansteht. Du hast ${memberTasks.length} Aufgaben.`;
 
       await sendPushToMember(member.id, {
         title: 'Familienplan – Heute',

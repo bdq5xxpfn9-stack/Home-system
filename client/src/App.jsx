@@ -509,7 +509,7 @@ export default function App() {
             <div className="bubble-cloud">
               {myTasksToday.map((task, index) => {
                 const bubble = getBubbleStyle(task, index, today);
-                const assigned = getAssignedNames(task, members);
+                const assigned = getPrimaryName(task, members);
                 return (
                   <button
                     key={task.id}
@@ -522,6 +522,11 @@ export default function App() {
                   >
                     <span className="bubble-title">{task.title}</span>
                     {assigned && <span className="bubble-meta">{assigned}</span>}
+                    {task.transferred_from_member_id && (
+                      <span className="bubble-meta">
+                        Übertragen von {getTransferredFromName(task, members)}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -884,6 +889,16 @@ function TaskRow({ task, members, onComplete, onDelete, onNudge, onTransfer, sho
   );
 }
 
+function getPrimaryName(task, members) {
+  const member = members.find((m) => m.id === task.primary_member_id);
+  return member ? member.name : '';
+}
+
+function getTransferredFromName(task, members) {
+  const member = members.find((m) => m.id === task.transferred_from_member_id);
+  return member ? member.name : '';
+}
+
 function getAssignedNames(task, members) {
   const names = members
     .filter((member) => member.id === task.primary_member_id || member.id === task.secondary_member_id)
@@ -909,11 +924,12 @@ function getBubbleStyle(task, index, today) {
   const size = 100 + intensity * 70;
   const light = 90 - intensity * 25;
   const deep = 80 - intensity * 28;
+  const hue = task.transferred_from_member_id ? 262 : 214;
   const delay = (index % 7) * 0.25;
   return {
     width: `${size}px`,
     height: `${size}px`,
-    background: `radial-gradient(circle at 30% 30%, hsl(212, 100%, ${light}%), hsl(214, 90%, ${deep}%))`,
+    background: `radial-gradient(circle at 30% 30%, hsl(${hue}, 100%, ${light}%), hsl(${hue}, 90%, ${deep}%))`,
     animationDelay: `${delay}s`,
     animationDuration: `${5.5 + (index % 5)}s`
   };

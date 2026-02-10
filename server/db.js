@@ -47,6 +47,8 @@ db.exec(`
     due_date TEXT NOT NULL,
     primary_member_id INTEGER,
     secondary_member_id INTEGER,
+    transferred_from_member_id INTEGER,
+    transferred_at TEXT,
     created_at TEXT NOT NULL,
     active INTEGER NOT NULL DEFAULT 1,
     FOREIGN KEY (household_id) REFERENCES households(id),
@@ -90,6 +92,19 @@ db.exec(`
     FOREIGN KEY (member_id) REFERENCES members(id)
   );
 `);
+
+function ensureColumn(table, column, type) {
+  const existing = db
+    .prepare(`PRAGMA table_info(${table})`)
+    .all()
+    .map((row) => row.name);
+  if (!existing.includes(column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  }
+}
+
+ensureColumn('tasks', 'transferred_from_member_id', 'INTEGER');
+ensureColumn('tasks', 'transferred_at', 'TEXT');
 
 export function nowISO() {
   return DateTime.utc().toISO();

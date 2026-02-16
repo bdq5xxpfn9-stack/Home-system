@@ -353,6 +353,16 @@ export default function App() {
     }
 
     try {
+      if ('Notification' in window && Notification.permission !== 'granted') {
+        const permission = await Notification.requestPermission();
+        if (permission !== 'granted') {
+          setNotice(
+            'Bitte Mitteilungen für „Familienplan“ erlauben. iPhone: Einstellungen → Mitteilungen → Familienplan.'
+          );
+          return;
+        }
+      }
+
       const { publicKey } = await fetchPushPublicKey();
       if (!publicKey) {
         setNotice('Push ist auf dem Server noch nicht konfiguriert.');
@@ -361,13 +371,17 @@ export default function App() {
 
       const registration = await navigator.serviceWorker.ready;
       const existing = await registration.pushManager.getSubscription();
-      let subscription = existing;
-      if (!subscription) {
-        subscription = await registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(publicKey)
-        });
+      if (existing) {
+        try {
+          await existing.unsubscribe();
+        } catch (_) {
+          // ignore and resubscribe
+        }
       }
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey)
+      });
 
       await savePushSubscription(session.memberId, subscription);
       const result = await sendPushTest(session.memberId);

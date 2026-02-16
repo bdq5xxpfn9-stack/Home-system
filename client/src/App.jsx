@@ -80,6 +80,7 @@ export default function App() {
   const [notice, setNotice] = useState('');
   const [actionNotice, setActionNotice] = useState('');
   const [pushStatus, setPushStatus] = useState(null);
+  const [pushDiag, setPushDiag] = useState(null);
   const [activeTask, setActiveTask] = useState(null);
   const [dataNotice, setDataNotice] = useState('');
   const [importFile, setImportFile] = useState(null);
@@ -137,6 +138,60 @@ export default function App() {
     } catch (_) {
       setPushStatus(null);
     }
+  }
+
+  async function handlePushDiagnostics() {
+    setNotice('');
+    setPushDiag(null);
+    const isStandalone =
+      window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+    const hasSW = 'serviceWorker' in navigator;
+    const hasPush = 'PushManager' in window;
+    const permission = 'Notification' in window ? Notification.permission : 'unsupported';
+
+    let publicKeyStatus = 'unbekannt';
+    try {
+      const { publicKey } = await fetchPushPublicKey();
+      publicKeyStatus = publicKey ? 'vorhanden' : 'fehlt';
+    } catch (_) {
+      publicKeyStatus = 'fehler';
+    }
+
+    let swReady = false;
+    let hasSubscription = false;
+    if (hasSW) {
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        swReady = Boolean(reg);
+        if (reg) {
+          const existing = await reg.pushManager.getSubscription();
+          hasSubscription = Boolean(existing);
+        }
+      } catch (_) {
+        swReady = false;
+      }
+    }
+
+    let server = null;
+    if (session) {
+      try {
+        server = await fetchPushStatus(session.memberId);
+        setPushStatus(server);
+      } catch (_) {
+        server = null;
+      }
+    }
+
+    setPushDiag({
+      isStandalone,
+      hasSW,
+      hasPush,
+      permission,
+      publicKeyStatus,
+      swReady,
+      hasSubscription,
+      server
+    });
   }
 
   async function handleJoin(event) {
@@ -449,7 +504,17 @@ export default function App() {
         setNotice('Keine Push-Geräte gefunden. Bitte App neu öffnen und erneut aktivieren.');
       }
     } catch (err) {
-      setNotice('Push konnte nicht aktiviert werden.');
+      const name = err?.name ? ` (${err.name})` : '';
+      const message = err?.message ? ` ${err.message}` : '';
+      if (err?.name === 'NotAllowedError') {
+        setNotice(
+          'Push blockiert: Bitte Mitteilungen erlauben. iPhone: Einstellungen → Mitteilungen → Familienplan.'
+        );
+      } else if (err?.name === 'InvalidStateError') {
+        setNotice('Push nur in der installierten App. Bitte vom Home-Bildschirm öffnen.');
+      } else {
+        setNotice(`Push konnte nicht aktiviert werden.${name}${message}`.trim());
+      }
     }
   }
 
@@ -920,11 +985,29 @@ export default function App() {
               <button className="button" onClick={handleEnablePush}>
                 Push aktivieren
               </button>
+              <button className="button ghost" onClick={handlePushDiagnostics}>
+                Push Diagnose
+              </button>
               {pushStatus && (
                 <p className="notice">
                   Server gespeichert: {pushStatus.subscriptions} Gerät(e){' '}
                   {pushStatus.configured ? '' : '(Server nicht konfiguriert)'}
                 </p>
+              )}
+              {pushDiag && (
+                <div className="notice">
+                  <div>Installiert: {pushDiag.isStandalone ? 'ja' : 'nein'}</div>
+                  <div>Service Worker: {pushDiag.hasSW ? 'ja' : 'nein'}</div>
+                  <div>Push API: {pushDiag.hasPush ? 'ja' : 'nein'}</div>
+                  <div>Mitteilungen: {pushDiag.permission}</div>
+                  <div>Server-Key: {pushDiag.publicKeyStatus}</div>
+                  <div>SW bereit: {pushDiag.swReady ? 'ja' : 'nein'}</div>
+                  <div>Lokales Abo: {pushDiag.hasSubscription ? 'ja' : 'nein'}</div>
+                  <div>
+                    Server-Abo:{' '}
+                    {pushDiag.server ? `${pushDiag.server.subscriptions} Gerät(e)` : 'unbekannt'}
+                  </div>
+                </div>
               )}
               {notice && <p className="notice">{notice}</p>}
             </div>

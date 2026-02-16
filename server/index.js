@@ -35,6 +35,10 @@ function getMember(id) {
   return db.prepare('SELECT * FROM members WHERE id = ?').get(id);
 }
 
+function getHouseholdMembers(householdId) {
+  return db.prepare('SELECT * FROM members WHERE household_id = ?').all(householdId);
+}
+
 function sendJson(res, status, payload) {
   res.status(status).json(payload);
 }
@@ -503,14 +507,22 @@ app.post('/api/tasks/:id/transfer', async (req, res) => {
 
   const updated = db.prepare('SELECT * FROM tasks WHERE id = ?').get(task.id);
 
-  let pushResult = { sent: 0, failed: 0, configured: false };
-  if (newPrimary && newPrimary !== fromMemberId) {
-    const fromMember = fromMemberId ? getMember(fromMemberId) : null;
-    const senderName = fromMember ? fromMember.name : 'Jemand';
-    pushResult = await sendPushToMember(newPrimary, {
-      title: 'Aufgabe übertragen',
-      body: `${senderName} hat dir die Aufgabe „${updated.title}“ übertragen.`
-    });
+  let pushResult = { sent: 0, failed: 0, configured: false, errors: [] };
+  const fromMember = fromMemberId ? getMember(fromMemberId) : null;
+  const senderName = fromMember ? fromMember.name : 'Jemand';
+  const newPrimaryMember = newPrimary ? getMember(newPrimary) : null;
+  const recipientName = newPrimaryMember ? newPrimaryMember.name : 'jemanden';
+  const householdMembers = getHouseholdMembers(task.household_id);
+  if (householdMembers.length) {
+    pushResult = await sendPushToMembers(
+      householdMembers.map((member) => member.id),
+      {
+        title: 'Aufgabe übertragen',
+        body: `${senderName} hat die Aufgabe „${updated.title}“ an ${recipientName} übertragen.`,
+        data: { type: 'transfer', taskId: updated.id }
+      },
+      fromMemberId || null
+    );
   }
 
   return sendJson(res, 200, { task: updated, push: pushResult });
@@ -526,24 +538,29 @@ app.post('/api/tasks/:id/nudge', async (req, res) => {
   const fromMember = fromMemberId ? getMember(fromMemberId) : null;
   const senderName = fromMember ? fromMember.name : 'Jemand';
 
+  const householdMembers = getHouseholdMembers(task.household_id);
   const targets = [task.primary_member_id, task.secondary_member_id].filter(
     (id) => id && id !== fromMemberId
   );
+  const targetNames = householdMembers
+    .filter((member) => targets.includes(member.id))
+    .map((member) => member.name)
+    .join(' & ');
+  const body = targetNames
+    ? `${senderName} hat ${targetNames} an „${task.title}“ erinnert.`
+    : `${senderName} hat an „${task.title}“ erinnert.`;
 
-  let sent = 0;
-  let failed = 0;
-  let configured = false;
-  for (const targetId of targets) {
-    const result = await sendPushToMember(targetId, {
+  const result = await sendPushToMembers(
+    householdMembers.map((member) => member.id),
+    {
       title: 'Erinnerung',
-      body: `${senderName} erinnert dich an: ${task.title}`
-    });
-    sent += result.sent;
-    failed += result.failed;
-    configured = configured || result.configured;
-  }
+      body,
+      data: { type: 'nudge', taskId: task.id }
+    },
+    fromMemberId || null
+  );
 
-  return sendJson(res, 200, { sent, failed, configured });
+  return sendJson(res, 200, result);
 });
 
 app.delete('/api/tasks/:id', (req, res) => {
@@ -752,6 +769,29 @@ async function sendPushToMember(memberId, payload) {
   return { sent, failed, configured: true, errors };
 }
 
+async function sendPushToMembers(memberIds, payload, excludeMemberId = null) {
+  const uniqueIds = Array.from(new Set((memberIds || []).filter(Boolean))).filter(
+    (id) => id !== excludeMemberId
+  );
+
+  let sent = 0;
+  let failed = 0;
+  let configured = false;
+  const errors = [];
+
+  for (const memberId of uniqueIds) {
+    const result = await sendPushToMember(memberId, payload);
+    sent += result.sent || 0;
+    failed += result.failed || 0;
+    configured = configured || result.configured;
+    if (result.errors?.length) {
+      errors.push(...result.errors);
+    }
+  }
+
+  return { sent, failed, configured, errors };
+}
+
 async function sendDailyReminders() {
   const households = db.prepare('SELECT * FROM households').all();
 
@@ -791,8 +831,8 @@ async function sendDailyReminders() {
 
       const body =
         memberTasks.length === 1
-          ? `Hey ${member.name}, schau dir deine Aufgabe für heute an: ${memberTasks[0].title}`
-          : `Hey ${member.name}, schau dir an, was heute ansteht. Du hast ${memberTasks.length} Aufgaben.`;
+          ? `Guten Morgen ${member.name}, schau dir deine Aufgabe für heute an: ${memberTasks[0].title}`
+          : `Guten Morgen ${member.name}, schau dir an, was heute ansteht. Du hast ${memberTasks.length} Aufgaben.`;
 
       await sendPushToMember(member.id, {
         title: 'Familienplan – Heute',
@@ -805,8 +845,65 @@ async function sendDailyReminders() {
   }
 }
 
+async function sendEveningReminders() {
+  const households = db.prepare('SELECT * FROM households').all();
+
+  for (const household of households) {
+    const tz = household.timezone || 'Europe/Zurich';
+    const today = DateTime.now().setZone(tz).toISODate();
+
+    const members = db
+      .prepare('SELECT * FROM members WHERE household_id = ?')
+      .all(household.id);
+
+    const tasks = db
+      .prepare(
+        `SELECT * FROM tasks
+         WHERE household_id = ?
+           AND active = 1
+           AND due_date <= ?`
+      )
+      .all(household.id, today);
+
+    if (!tasks.length) {
+      continue;
+    }
+
+    for (const member of members) {
+      if (member.last_evening_push_date === today) {
+        continue;
+      }
+
+      const memberTasks = tasks.filter(
+        (task) => task.primary_member_id === member.id || task.secondary_member_id === member.id
+      );
+
+      if (!memberTasks.length) {
+        continue;
+      }
+
+      const body =
+        memberTasks.length === 1
+          ? `Guten Abend ${member.name}, diese Aufgabe ist noch offen: ${memberTasks[0].title}`
+          : `Guten Abend ${member.name}, du hast noch ${memberTasks.length} offene Aufgaben.`;
+
+      await sendPushToMember(member.id, {
+        title: 'Familienplan – Abend',
+        body,
+        data: { type: 'evening', date: today }
+      });
+
+      db.prepare('UPDATE members SET last_evening_push_date = ? WHERE id = ?').run(today, member.id);
+    }
+  }
+}
+
 cron.schedule('0 7 * * *', () => {
   sendDailyReminders();
+}, { timezone: 'Europe/Zurich' });
+
+cron.schedule('0 20 * * *', () => {
+  sendEveningReminders();
 }, { timezone: 'Europe/Zurich' });
 
 const clientDist = path.join(__dirname, '../client/dist');

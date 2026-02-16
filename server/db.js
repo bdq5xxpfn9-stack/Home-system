@@ -105,6 +105,7 @@ function ensureColumn(table, column, type) {
 
 ensureColumn('tasks', 'transferred_from_member_id', 'INTEGER');
 ensureColumn('tasks', 'transferred_at', 'TEXT');
+ensureColumn('members', 'last_evening_push_date', 'TEXT');
 
 export function nowISO() {
   return DateTime.utc().toISO();

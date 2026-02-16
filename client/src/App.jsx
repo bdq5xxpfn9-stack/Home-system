@@ -120,9 +120,32 @@ export default function App() {
         fetchTasks(session.householdId),
         fetchLists(session.householdId)
       ]);
-      setMembers(membersRes.members);
+      const fetchedMembers = membersRes.members || [];
+      setMembers(fetchedMembers);
       setTasks(tasksRes.tasks);
       setLists(listsRes.lists);
+      if (session) {
+        const hasCurrent = fetchedMembers.some((member) => member.id === session.memberId);
+        if (!hasCurrent && session.memberName) {
+          const match = fetchedMembers.find(
+            (member) =>
+              member.name &&
+              member.name.toLowerCase() === String(session.memberName).toLowerCase()
+          );
+          if (match) {
+            const newSession = {
+              ...session,
+              memberId: match.id,
+              memberName: match.name
+            };
+            saveSession(newSession);
+            setSession(newSession);
+            setError('Dein Mitglied wurde aktualisiert.');
+          } else {
+            setError('Dein Mitglied wurde nicht gefunden. Bitte „Neu verbinden“.');
+          }
+        }
+      }
     } catch (err) {
       setError(err.message);
     } finally {

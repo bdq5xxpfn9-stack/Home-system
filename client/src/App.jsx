@@ -22,6 +22,7 @@ import {
   importHousehold,
   fetchPushPublicKey,
   savePushSubscription,
+  fetchPushStatus,
   sendPushTest
 } from './api.js';
 import {
@@ -78,6 +79,7 @@ export default function App() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [actionNotice, setActionNotice] = useState('');
+  const [pushStatus, setPushStatus] = useState(null);
   const [activeTask, setActiveTask] = useState(null);
   const [dataNotice, setDataNotice] = useState('');
   const [importFile, setImportFile] = useState(null);
@@ -88,6 +90,11 @@ export default function App() {
   useEffect(() => {
     if (!session) return;
     refreshAll();
+  }, [session]);
+
+  useEffect(() => {
+    if (!session) return;
+    refreshPushStatus();
   }, [session]);
 
   useEffect(() => {
@@ -122,6 +129,16 @@ export default function App() {
     }
   }
 
+  async function refreshPushStatus() {
+    if (!session) return;
+    try {
+      const status = await fetchPushStatus(session.memberId);
+      setPushStatus(status);
+    } catch (_) {
+      setPushStatus(null);
+    }
+  }
+
   async function handleJoin(event) {
     event.preventDefault();
     setError('');
@@ -147,6 +164,7 @@ export default function App() {
       };
       saveSession(newSession);
       setSession(newSession);
+      await refreshPushStatus();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -160,6 +178,35 @@ export default function App() {
     setMembers([]);
     setTasks([]);
     setLists([]);
+    setPushStatus(null);
+  }
+
+  async function handleReconnect() {
+    if (!session) return;
+    setDataNotice('');
+    try {
+      const res = await joinHousehold({
+        accessCode: session.accessCode,
+        householdName: '',
+        memberName: session.memberName,
+        timezone: TZ,
+        locale: LOCALE
+      });
+      const newSession = {
+        householdId: res.household.id,
+        householdName: res.household.name,
+        accessCode: res.household.access_code,
+        memberId: res.member.id,
+        memberName: res.member.name
+      };
+      saveSession(newSession);
+      setSession(newSession);
+      setDataNotice('Neu verbunden. Daten werden geladen.');
+      await refreshAll();
+      await refreshPushStatus();
+    } catch (err) {
+      setDataNotice(err.message);
+    }
   }
 
   async function handleCreateTask(event) {
@@ -385,12 +432,19 @@ export default function App() {
 
       await savePushSubscription(session.memberId, subscription);
       const result = await sendPushTest(session.memberId);
+      await refreshPushStatus();
       if (!result.configured) {
         setNotice('Push ist auf dem Server noch nicht konfiguriert.');
       } else if (result.sent > 0) {
         setNotice('Push-Benachrichtigungen sind aktiviert.');
       } else if (result.failed > 0) {
-        setNotice('Push konnte nicht zugestellt werden. Bitte iOS-Mitteilungen prüfen.');
+        const errorCode = result.errors?.[0]?.statusCode;
+        const errorSuffix = errorCode ? ` (Fehler ${errorCode})` : '';
+        setNotice(
+          `Push konnte nicht zugestellt werden. Bitte iOS-Mitteilungen prüfen. (Geräte: ${
+            result.subscriptions || 0
+          })${errorSuffix}`
+        );
       } else {
         setNotice('Keine Push-Geräte gefunden. Bitte App neu öffnen und erneut aktivieren.');
       }
@@ -508,6 +562,11 @@ export default function App() {
       (task) => task.primary_member_id === member.id || task.secondary_member_id === member.id
     )
   }));
+
+  const onlySelf =
+    session &&
+    members.length === 1 &&
+    members[0]?.id === session.memberId;
 
   if (!session) {
     return (
@@ -818,6 +877,12 @@ export default function App() {
           <div className="grid">
             <div className="card">
               <h3>Mitglieder</h3>
+              {onlySelf && (
+                <p className="notice">
+                  Der Server zeigt nur 1 Mitglied. Falls das falsch ist: Daten importieren oder
+                  „Neu verbinden“ drücken.
+                </p>
+              )}
               {members.map((member) => (
                 <div className="row" key={member.id} style={{ justifyContent: 'space-between' }}>
                   <span className="badge" style={{ background: member.color || '#ddd' }}>
@@ -842,6 +907,9 @@ export default function App() {
                   Hinzufügen
                 </button>
               </form>
+              <button className="button ghost" onClick={handleReconnect}>
+                Neu verbinden
+              </button>
             </div>
             <div className="card">
               <h3>Push-Benachrichtigungen</h3>
@@ -852,6 +920,12 @@ export default function App() {
               <button className="button" onClick={handleEnablePush}>
                 Push aktivieren
               </button>
+              {pushStatus && (
+                <p className="notice">
+                  Server gespeichert: {pushStatus.subscriptions} Gerät(e){' '}
+                  {pushStatus.configured ? '' : '(Server nicht konfiguriert)'}
+                </p>
+              )}
               {notice && <p className="notice">{notice}</p>}
             </div>
             <div className="card">

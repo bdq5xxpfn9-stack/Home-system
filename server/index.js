@@ -17,7 +17,11 @@ app.use(express.json());
 
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
-const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:family@example.com';
+const rawSubject = process.env.VAPID_SUBJECT || 'mailto:family@example.com';
+const VAPID_SUBJECT =
+  rawSubject.startsWith('mailto:') || rawSubject.startsWith('http')
+    ? rawSubject
+    : `mailto:${rawSubject}`;
 
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
   webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
@@ -676,13 +680,26 @@ app.post('/api/members/:id/push-subscription', (req, res) => {
   }
 
   const createdAt = nowISO();
-  db.prepare('INSERT INTO push_subscriptions (member_id, subscription_json, created_at) VALUES (?, ?, ?)').run(
-    member.id,
-    JSON.stringify(subscription),
-    createdAt
-  );
+  db.prepare('DELETE FROM push_subscriptions WHERE member_id = ?').run(member.id);
+  db.prepare(
+    'INSERT INTO push_subscriptions (member_id, subscription_json, created_at) VALUES (?, ?, ?)'
+  ).run(member.id, JSON.stringify(subscription), createdAt);
 
   return sendJson(res, 200, { ok: true });
+});
+
+app.get('/api/members/:id/push-status', (req, res) => {
+  const member = getMember(req.params.id);
+  if (!member) {
+    return sendJson(res, 404, { error: 'Member not found.' });
+  }
+
+  const configured = Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY);
+  const count = db
+    .prepare('SELECT COUNT(*) as count FROM push_subscriptions WHERE member_id = ?')
+    .get(member.id).count;
+
+  return sendJson(res, 200, { configured, subscriptions: count });
 });
 
 app.post('/api/members/:id/push-test', async (req, res) => {
@@ -696,7 +713,10 @@ app.post('/api/members/:id/push-test', async (req, res) => {
     body: 'Push-Benachrichtigungen sind aktiv.'
   });
 
-  return sendJson(res, 200, result);
+  const count = db
+    .prepare('SELECT COUNT(*) as count FROM push_subscriptions WHERE member_id = ?')
+    .get(member.id).count;
+  return sendJson(res, 200, { ...result, subscriptions: count });
 });
 
 async function sendPushToMember(memberId, payload) {
@@ -711,6 +731,7 @@ async function sendPushToMember(memberId, payload) {
 
   let sent = 0;
   let failed = 0;
+  const errors = [];
   for (const sub of subs) {
     try {
       await webpush.sendNotification(JSON.parse(sub.subscription_json), JSON.stringify(payload));
@@ -720,12 +741,15 @@ async function sendPushToMember(memberId, payload) {
         db.prepare('DELETE FROM push_subscriptions WHERE id = ?').run(sub.id);
       } else {
         failed += 1;
-        console.error('Push send failed', err?.statusCode || '', err?.body || err?.message || err);
+        const statusCode = err?.statusCode || null;
+        const message = err?.body || err?.message || 'Push error';
+        errors.push({ statusCode, message });
+        console.error('Push send failed', statusCode || '', message);
       }
     }
   }
 
-  return { sent, failed, configured: true };
+  return { sent, failed, configured: true, errors };
 }
 
 async function sendDailyReminders() {

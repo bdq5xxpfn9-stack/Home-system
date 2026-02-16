@@ -151,6 +151,10 @@ export function savePushSubscription(memberId, subscription) {
   });
 }
 
+export function fetchPushStatus(memberId) {
+  return request(`/api/members/${memberId}/push-status`);
+}
+
 export function sendPushTest(memberId) {
   return request(`/api/members/${memberId}/push-test`, {
     method: 'POST'

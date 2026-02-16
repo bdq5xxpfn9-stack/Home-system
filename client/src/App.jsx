@@ -747,8 +747,7 @@ export default function App() {
 
   const myTasksToday = session
     ? tasksDueToday.filter(
-        (task) =>
-          task.primary_member_id === session.memberId || task.secondary_member_id === session.memberId
+        (task) => task.primary_member_id === session.memberId
       )
     : tasksDueToday;
 

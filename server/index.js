@@ -909,7 +909,7 @@ async function sendEveningReminders() {
       }
 
       const memberTasks = tasks.filter(
-        (task) => task.primary_member_id === member.id || task.secondary_member_id === member.id
+        (task) => task.primary_member_id === member.id
       );
 
       if (!memberTasks.length) {
@@ -918,16 +918,64 @@ async function sendEveningReminders() {
 
       const body =
         memberTasks.length === 1
-          ? `Guten Abend ${member.name}, diese Aufgabe ist noch offen: ${memberTasks[0].title}`
-          : `Guten Abend ${member.name}, du hast noch ${memberTasks.length} offene Aufgaben.`;
+          ? `Hey ${member.name}, ist die Aufgabe „${memberTasks[0].title}“ bis 21:00 erledigt?`
+          : `Hey ${member.name}, hast du deine Aufgaben für heute erledigt? Du hast noch ${memberTasks.length} offene.`;
 
       await sendPushToMember(member.id, {
-        title: 'Familienplan – Abend',
+        title: 'Familienplan – 20:00 Erinnerung',
         body,
         data: { type: 'evening', date: today }
       });
 
       db.prepare('UPDATE members SET last_evening_push_date = ? WHERE id = ?').run(today, member.id);
+    }
+  }
+}
+
+async function sendPenaltyReminders() {
+  const households = db.prepare('SELECT * FROM households').all();
+
+  for (const household of households) {
+    const tz = household.timezone || 'Europe/Zurich';
+    const today = DateTime.now().setZone(tz).toISODate();
+
+    const tasks = db
+      .prepare(
+        `SELECT * FROM tasks
+         WHERE household_id = ?
+           AND active = 1
+           AND due_date <= ?`
+      )
+      .all(household.id, today);
+
+    if (!tasks.length) {
+      continue;
+    }
+
+    for (const task of tasks) {
+      if (!task.primary_member_id) {
+        continue;
+      }
+      if (task.last_penalty_date === today) {
+        continue;
+      }
+
+      const primary = getMember(task.primary_member_id);
+      if (!primary) {
+        continue;
+      }
+
+      const secondary = task.secondary_member_id ? getMember(task.secondary_member_id) : null;
+      const penaltyTarget = secondary ? ` an ${secondary.name}` : '';
+      const body = `Aufgabe „${task.title}“ ist nicht erledigt. Du schuldest deine Strafe${penaltyTarget}.`;
+
+      await sendPushToMember(primary.id, {
+        title: 'Familienplan – 21:00 Strafe',
+        body,
+        data: { type: 'penalty', taskId: task.id, date: today }
+      });
+
+      db.prepare('UPDATE tasks SET last_penalty_date = ? WHERE id = ?').run(today, task.id);
     }
   }
 }
@@ -938,6 +986,10 @@ cron.schedule('0 7 * * *', () => {
 
 cron.schedule('0 20 * * *', () => {
   sendEveningReminders();
+}, { timezone: 'Europe/Zurich' });
+
+cron.schedule('0 21 * * *', () => {
+  sendPenaltyReminders();
 }, { timezone: 'Europe/Zurich' });
 
 const clientDist = path.join(__dirname, '../client/dist');

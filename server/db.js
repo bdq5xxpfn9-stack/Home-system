@@ -106,6 +106,8 @@ function ensureColumn(table, column, type) {
 ensureColumn('tasks', 'transferred_from_member_id', 'INTEGER');
 ensureColumn('tasks', 'transferred_at', 'TEXT');
 ensureColumn('tasks', 'recurrence_rule', 'TEXT');
+ensureColumn('tasks', 'last_evening_reminder_date', 'TEXT');
+ensureColumn('tasks', 'last_penalty_date', 'TEXT');
 ensureColumn('members', 'last_evening_push_date', 'TEXT');
 
 export function nowISO() {

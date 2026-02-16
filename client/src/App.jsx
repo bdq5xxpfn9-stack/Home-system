@@ -6,6 +6,7 @@ import {
   fetchTasks,
   fetchLists,
   createTask,
+  updateTask,
   completeTask,
   transferTask,
   nudgeTask,
@@ -52,9 +53,43 @@ const RECURRENCE_OPTIONS = [
   { value: 'once', label: RECURRENCE_LABELS.once },
   { value: 'daily', label: RECURRENCE_LABELS.daily },
   { value: 'weekly', label: RECURRENCE_LABELS.weekly },
+  { value: 'monthly', label: RECURRENCE_LABELS.monthly },
   { value: 'seasonal', label: RECURRENCE_LABELS.seasonal },
   { value: 'half_year', label: RECURRENCE_LABELS.half_year },
   { value: 'yearly', label: RECURRENCE_LABELS.yearly }
+];
+
+const WEEKDAY_LABELS = [
+  'Montag',
+  'Dienstag',
+  'Mittwoch',
+  'Donnerstag',
+  'Freitag',
+  'Samstag',
+  'Sonntag'
+];
+
+const MONTH_LABELS = [
+  'Januar',
+  'Februar',
+  'März',
+  'April',
+  'Mai',
+  'Juni',
+  'Juli',
+  'August',
+  'September',
+  'Oktober',
+  'November',
+  'Dezember'
+];
+
+const WEEK_OF_MONTH_OPTIONS = [
+  { value: '1', label: '1.' },
+  { value: '2', label: '2.' },
+  { value: '3', label: '3.' },
+  { value: '4', label: '4.' },
+  { value: '-1', label: 'Letzter' }
 ];
 
 function urlBase64ToUint8Array(base64String) {
@@ -84,6 +119,14 @@ export default function App() {
   const [activeTask, setActiveTask] = useState(null);
   const [dataNotice, setDataNotice] = useState('');
   const [importFile, setImportFile] = useState(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editDraft, setEditDraft] = useState(null);
+  const [createRecurrence, setCreateRecurrence] = useState('weekly');
+  const [createRecurrenceMode, setCreateRecurrenceMode] = useState('by_date');
+  const [createWeekOfMonth, setCreateWeekOfMonth] = useState('1');
+  const [createWeekday, setCreateWeekday] = useState('1');
+  const [createMonth, setCreateMonth] = useState(String(DateTime.now().month));
+  const [createDueDate, setCreateDueDate] = useState(todayISO());
 
   const today = todayISO();
   const week = weekRange(today);
@@ -292,19 +335,34 @@ export default function App() {
     if (!session) return;
 
     const formData = new FormData(event.target);
+    const dueDate = createDueDate || formData.get('dueDate');
     const payload = {
       title: formData.get('title').trim(),
       notes: formData.get('notes').trim(),
-      recurrence: formData.get('recurrence'),
-      dueDate: formData.get('dueDate'),
+      recurrence: createRecurrence,
+      dueDate,
       primaryMemberId: formData.get('primaryMemberId') || null,
-      secondaryMemberId: formData.get('secondaryMemberId') || null
+      secondaryMemberId: formData.get('secondaryMemberId') || null,
+      recurrenceRule: buildRecurrenceRule(
+        createRecurrence,
+        createRecurrenceMode,
+        createWeekOfMonth,
+        createWeekday,
+        createMonth,
+        dueDate
+      )
     };
 
     try {
       const res = await createTask(session.householdId, payload);
       setTasks((prev) => [...prev, res.task].sort((a, b) => a.due_date.localeCompare(b.due_date)));
       event.target.reset();
+      setCreateRecurrence('weekly');
+      setCreateRecurrenceMode('by_date');
+      setCreateWeekOfMonth('1');
+      setCreateWeekday('1');
+      setCreateMonth(String(DateTime.now().month));
+      setCreateDueDate(todayISO());
     } catch (err) {
       setError(err.message);
     }
@@ -325,6 +383,59 @@ export default function App() {
       }
     } catch (err) {
       setError(err.message);
+    }
+  }
+
+  function startEditTask(task) {
+    const rule = parseRecurrenceRuleValue(task.recurrence_rule);
+    const dueDate = task.due_date;
+    const due = DateTime.fromISO(dueDate);
+    setEditDraft({
+      id: task.id,
+      title: task.title,
+      notes: task.notes || '',
+      recurrence: task.recurrence,
+      dueDate,
+      primaryMemberId: task.primary_member_id || '',
+      secondaryMemberId: task.secondary_member_id || '',
+      recurrenceMode: rule?.mode || 'by_date',
+      weekOfMonth: String(rule?.weekOfMonth ?? '1'),
+      weekday: String(rule?.weekday ?? String(due.weekday)),
+      month: String(rule?.month || rule?.startMonth || due.month)
+    });
+    setIsEditing(true);
+    setActiveTask(task);
+    setActionNotice('');
+  }
+
+  async function handleSaveEdit() {
+    if (!editDraft) return;
+    setActionNotice('');
+    try {
+      const payload = {
+        title: editDraft.title.trim(),
+        notes: editDraft.notes.trim(),
+        recurrence: editDraft.recurrence,
+        dueDate: editDraft.dueDate,
+        primaryMemberId: editDraft.primaryMemberId || null,
+        secondaryMemberId: editDraft.secondaryMemberId || null,
+        recurrenceRule: buildRecurrenceRule(
+          editDraft.recurrence,
+          editDraft.recurrenceMode,
+          editDraft.weekOfMonth,
+          editDraft.weekday,
+          editDraft.month,
+          editDraft.dueDate
+        )
+      };
+      const res = await updateTask(editDraft.id, payload);
+      setTasks((prev) => prev.map((task) => (task.id === editDraft.id ? res.task : task)));
+      setActiveTask(res.task);
+      setIsEditing(false);
+      setEditDraft(null);
+      setActionNotice('Aufgabe gespeichert.');
+    } catch (err) {
+      setActionNotice(err.message);
     }
   }
 
@@ -651,6 +762,18 @@ export default function App() {
     )
   }));
 
+  const createMonthBased = ['monthly', 'seasonal', 'half_year', 'yearly'].includes(
+    createRecurrence
+  );
+  const createShowMonth = ['seasonal', 'half_year', 'yearly'].includes(createRecurrence);
+  const createShowWeekday = createMonthBased && createRecurrenceMode === 'by_weekday';
+  const editMonthBased =
+    editDraft && ['monthly', 'seasonal', 'half_year', 'yearly'].includes(editDraft.recurrence);
+  const editShowMonth =
+    editDraft &&
+    ['seasonal', 'half_year', 'yearly'].includes(editDraft.recurrence);
+  const editShowWeekday = editMonthBased && editDraft?.recurrenceMode === 'by_weekday';
+
   const onlySelf =
     session &&
     members.length === 1 &&
@@ -837,11 +960,21 @@ export default function App() {
                 </div>
                 <div className="field">
                   <label>Fällig am</label>
-                  <input name="dueDate" type="date" defaultValue={today} required />
+                  <input
+                    name="dueDate"
+                    type="date"
+                    value={createDueDate}
+                    onChange={(event) => setCreateDueDate(event.target.value)}
+                    required
+                  />
                 </div>
                 <div className="field">
                   <label>Wiederholung</label>
-                  <select name="recurrence" defaultValue="weekly">
+                  <select
+                    name="recurrence"
+                    value={createRecurrence}
+                    onChange={(event) => setCreateRecurrence(event.target.value)}
+                  >
                     {RECURRENCE_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>
                         {option.label}
@@ -849,6 +982,60 @@ export default function App() {
                     ))}
                   </select>
                 </div>
+                {createMonthBased && (
+                  <div className="field">
+                    <label>Wiederholungstyp</label>
+                    <select
+                      value={createRecurrenceMode}
+                      onChange={(event) => setCreateRecurrenceMode(event.target.value)}
+                    >
+                      <option value="by_date">Gleiches Datum im Monat</option>
+                      <option value="by_weekday">Wochentag im Monat (z.B. 1. Montag)</option>
+                    </select>
+                  </div>
+                )}
+                {createShowWeekday && (
+                  <div className="field">
+                    <label>Wochentag</label>
+                    <div className="row">
+                      <select
+                        value={createWeekOfMonth}
+                        onChange={(event) => setCreateWeekOfMonth(event.target.value)}
+                      >
+                        {WEEK_OF_MONTH_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        value={createWeekday}
+                        onChange={(event) => setCreateWeekday(event.target.value)}
+                      >
+                        {WEEKDAY_LABELS.map((label, index) => (
+                          <option key={label} value={index + 1}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                )}
+                {createShowMonth && (
+                  <div className="field">
+                    <label>{createRecurrence === 'yearly' ? 'Monat' : 'Startmonat'}</label>
+                    <select
+                      value={createMonth}
+                      onChange={(event) => setCreateMonth(event.target.value)}
+                    >
+                      {MONTH_LABELS.map((label, index) => (
+                        <option key={label} value={index + 1}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div className="field">
                   <label>Hauptperson</label>
                   <select name="primaryMemberId" defaultValue="">
@@ -890,6 +1077,7 @@ export default function App() {
                   members={members}
                   onComplete={handleCompleteTask}
                   onDelete={handleDeleteTask}
+                  onEdit={() => startEditTask(task)}
                   showNotes
                 />
               ))}
@@ -1075,41 +1263,226 @@ export default function App() {
           onClick={() => {
             setActiveTask(null);
             setActionNotice('');
+            setIsEditing(false);
+            setEditDraft(null);
           }}
         >
           <div className="modal" onClick={(event) => event.stopPropagation()}>
             <div className="modal-header">
               <h3>{activeTask.title}</h3>
-              <button className="button ghost" onClick={() => setActiveTask(null)}>
+              <button
+                className="button ghost"
+                onClick={() => {
+                  setActiveTask(null);
+                  setIsEditing(false);
+                  setEditDraft(null);
+                }}
+              >
                 Schließen
               </button>
             </div>
-            <p className="modal-meta">
-              {RECURRENCE_LABELS[activeTask.recurrence]} · fällig am{' '}
-              {formatDate(activeTask.due_date)}
-            </p>
-            <p className="modal-meta">Zuständig: {getAssignedNames(activeTask, members) || 'Offen'}</p>
-            {activeTask.notes && <p className="modal-notes">{activeTask.notes}</p>}
-            <div className="modal-actions">
-              <button className="button" onClick={() => handleCompleteTask(activeTask.id)}>
-                Erledigt
-              </button>
-              <button className="button secondary" onClick={() => handleNudgeTask(activeTask)}>
-                Anstupsen
-              </button>
-              <button
-                className="button secondary"
-                onClick={() => handleTransferTask(activeTask, { openModal: true })}
-                disabled={!activeTask.secondary_member_id}
-                title={
-                  activeTask.secondary_member_id
-                    ? 'An Zweitperson übertragen'
-                    : 'Keine Zweitperson hinterlegt'
-                }
-              >
-                An Zweitperson übertragen
-              </button>
-            </div>
+            {isEditing && editDraft ? (
+              <div className="form">
+                <div className="field">
+                  <label>Titel</label>
+                  <input
+                    value={editDraft.title}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({ ...prev, title: event.target.value }))
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label>Fällig am</label>
+                  <input
+                    type="date"
+                    value={editDraft.dueDate}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({ ...prev, dueDate: event.target.value }))
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label>Wiederholung</label>
+                  <select
+                    value={editDraft.recurrence}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({ ...prev, recurrence: event.target.value }))
+                    }
+                  >
+                    {RECURRENCE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {editMonthBased && (
+                  <div className="field">
+                    <label>Wiederholungstyp</label>
+                    <select
+                      value={editDraft.recurrenceMode}
+                      onChange={(event) =>
+                        setEditDraft((prev) => ({
+                          ...prev,
+                          recurrenceMode: event.target.value
+                        }))
+                      }
+                    >
+                      <option value="by_date">Gleiches Datum im Monat</option>
+                      <option value="by_weekday">Wochentag im Monat (z.B. 1. Montag)</option>
+                    </select>
+                  </div>
+                )}
+                {editShowWeekday && (
+                  <div className="field">
+                    <label>Wochentag</label>
+                    <div className="row">
+                      <select
+                        value={editDraft.weekOfMonth}
+                        onChange={(event) =>
+                          setEditDraft((prev) => ({
+                            ...prev,
+                            weekOfMonth: event.target.value
+                          }))
+                        }
+                      >
+                        {WEEK_OF_MONTH_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        value={editDraft.weekday}
+                        onChange={(event) =>
+                          setEditDraft((prev) => ({ ...prev, weekday: event.target.value }))
+                        }
+                      >
+                        {WEEKDAY_LABELS.map((label, index) => (
+                          <option key={label} value={index + 1}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                )}
+                {editShowMonth && (
+                  <div className="field">
+                    <label>{editDraft.recurrence === 'yearly' ? 'Monat' : 'Startmonat'}</label>
+                    <select
+                      value={editDraft.month}
+                      onChange={(event) =>
+                        setEditDraft((prev) => ({ ...prev, month: event.target.value }))
+                      }
+                    >
+                      {MONTH_LABELS.map((label, index) => (
+                        <option key={label} value={index + 1}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                <div className="field">
+                  <label>Hauptperson</label>
+                  <select
+                    value={editDraft.primaryMemberId}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({
+                        ...prev,
+                        primaryMemberId: event.target.value
+                      }))
+                    }
+                  >
+                    <option value="">Keine</option>
+                    {members.map((member) => (
+                      <option key={member.id} value={member.id}>
+                        {member.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field">
+                  <label>Zweitperson</label>
+                  <select
+                    value={editDraft.secondaryMemberId}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({
+                        ...prev,
+                        secondaryMemberId: event.target.value
+                      }))
+                    }
+                  >
+                    <option value="">Keine</option>
+                    {members.map((member) => (
+                      <option key={member.id} value={member.id}>
+                        {member.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field">
+                  <label>Notiz</label>
+                  <textarea
+                    rows="2"
+                    value={editDraft.notes}
+                    onChange={(event) =>
+                      setEditDraft((prev) => ({ ...prev, notes: event.target.value }))
+                    }
+                  />
+                </div>
+                <div className="modal-actions">
+                  <button className="button" onClick={handleSaveEdit}>
+                    Speichern
+                  </button>
+                  <button
+                    className="button ghost"
+                    onClick={() => {
+                      setIsEditing(false);
+                      setEditDraft(null);
+                    }}
+                  >
+                    Abbrechen
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <p className="modal-meta">
+                  {formatRecurrenceLabel(activeTask)} · fällig am{' '}
+                  {formatDate(activeTask.due_date)}
+                </p>
+                <p className="modal-meta">
+                  Zuständig: {getAssignedNames(activeTask, members) || 'Offen'}
+                </p>
+                {activeTask.notes && <p className="modal-notes">{activeTask.notes}</p>}
+                <div className="modal-actions">
+                  <button className="button" onClick={() => handleCompleteTask(activeTask.id)}>
+                    Erledigt
+                  </button>
+                  <button className="button secondary" onClick={() => handleNudgeTask(activeTask)}>
+                    Anstupsen
+                  </button>
+                  <button
+                    className="button secondary"
+                    onClick={() => handleTransferTask(activeTask, { openModal: true })}
+                    disabled={!activeTask.secondary_member_id}
+                    title={
+                      activeTask.secondary_member_id
+                        ? 'An Zweitperson übertragen'
+                        : 'Keine Zweitperson hinterlegt'
+                    }
+                  >
+                    An Zweitperson übertragen
+                  </button>
+                  <button className="button secondary" onClick={() => startEditTask(activeTask)}>
+                    Bearbeiten
+                  </button>
+                </div>
+              </>
+            )}
             {actionNotice && <p className="notice">{actionNotice}</p>}
           </div>
         </div>
@@ -1120,7 +1493,16 @@ export default function App() {
   );
 }
 
-function TaskRow({ task, members, onComplete, onDelete, onNudge, onTransfer, showNotes }) {
+function TaskRow({
+  task,
+  members,
+  onComplete,
+  onDelete,
+  onNudge,
+  onTransfer,
+  onEdit,
+  showNotes
+}) {
   const memberNames = members
     .filter((member) => member.id === task.primary_member_id || member.id === task.secondary_member_id)
     .map((member) => member.name)
@@ -1134,7 +1516,7 @@ function TaskRow({ task, members, onComplete, onDelete, onNudge, onTransfer, sho
       <div className="task-title">
         <strong>{task.title}</strong>
         <span className="task-meta">
-          {RECURRENCE_LABELS[task.recurrence]} · {dueLabel}
+          {formatRecurrenceLabel(task)} · {dueLabel}
           {memberNames ? ` · ${memberNames}` : ''}
         </span>
         {showNotes && task.notes && <span className="task-meta">{task.notes}</span>}
@@ -1160,6 +1542,11 @@ function TaskRow({ task, members, onComplete, onDelete, onNudge, onTransfer, sho
             Übertragen
           </button>
         )}
+        {onEdit && (
+          <button className="button secondary" onClick={onEdit}>
+            Bearbeiten
+          </button>
+        )}
         <button className="button ghost" onClick={() => onDelete(task.id)}>
           Entfernen
         </button>
@@ -1176,6 +1563,67 @@ function getPrimaryName(task, members) {
 function getTransferredFromName(task, members) {
   const member = members.find((m) => m.id === task.transferred_from_member_id);
   return member ? member.name : '';
+}
+
+function parseRecurrenceRuleValue(raw) {
+  if (!raw) return null;
+  if (typeof raw === 'object') return raw;
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    return null;
+  }
+}
+
+function buildRecurrenceRule(recurrence, mode, weekOfMonth, weekday, month, dueDate) {
+  const monthBased = ['monthly', 'seasonal', 'half_year', 'yearly'].includes(recurrence);
+  if (!monthBased) return null;
+
+  const rule = { mode };
+  if (mode === 'by_weekday') {
+    rule.weekOfMonth = Number(weekOfMonth || 1);
+    rule.weekday = Number(weekday || 1);
+  } else if (dueDate) {
+    const base = DateTime.fromISO(dueDate);
+    rule.day = base.day;
+  }
+
+  if (recurrence === 'yearly') {
+    rule.month = Number(month || DateTime.fromISO(dueDate || DateTime.now().toISODate()).month);
+  } else if (recurrence === 'seasonal' || recurrence === 'half_year') {
+    rule.startMonth = Number(month || DateTime.fromISO(dueDate || DateTime.now().toISODate()).month);
+  }
+
+  return rule;
+}
+
+function formatRecurrenceLabel(task) {
+  const base = RECURRENCE_LABELS[task.recurrence] || task.recurrence;
+  const rule = parseRecurrenceRuleValue(task.recurrence_rule);
+  if (!rule) return base;
+
+  let detail = '';
+  if (rule.mode === 'by_weekday' && rule.weekday) {
+    const weekOfMonth = Number(rule.weekOfMonth || 1);
+    const weekday = Number(rule.weekday || 1);
+    const weekLabel = weekOfMonth === -1 ? 'letzter' : `${weekOfMonth}.`;
+    const dayLabel = WEEKDAY_LABELS[weekday - 1] || '';
+    detail = `${weekLabel} ${dayLabel}`;
+  } else if (rule.mode === 'by_date' && rule.day) {
+    detail = `am ${Number(rule.day)}.`;
+  }
+
+  if (task.recurrence === 'yearly' && rule.month) {
+    const month = Number(rule.month);
+    detail = detail ? `${detail} im ${MONTH_LABELS[month - 1]}` : base;
+  }
+
+  if ((task.recurrence === 'seasonal' || task.recurrence === 'half_year') && rule.startMonth) {
+    const startMonth = Number(rule.startMonth);
+    detail = detail ? `${detail} ab ${MONTH_LABELS[startMonth - 1]}` : base;
+  }
+
+  return detail ? `${base} · ${detail}` : base;
 }
 
 function getAssignedNames(task, members) {

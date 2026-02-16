@@ -6,7 +6,14 @@ import { DateTime } from 'luxon';
 import cron from 'node-cron';
 import webpush from 'web-push';
 import { db, nowISO } from './db.js';
-import { nextDueDate, randomColor, todayISO, PASTEL_COLORS } from './utils.js';
+import {
+  nextDueDate,
+  nextDueDateWithRule,
+  parseRecurrenceRule,
+  randomColor,
+  todayISO,
+  PASTEL_COLORS
+} from './utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -240,8 +247,8 @@ app.post('/api/admin/import', (req, res) => {
     const info = db
       .prepare(
         `INSERT INTO tasks
-          (household_id, title, notes, recurrence, due_date, primary_member_id, secondary_member_id, transferred_from_member_id, transferred_at, created_at, active)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          (household_id, title, notes, recurrence, due_date, primary_member_id, secondary_member_id, recurrence_rule, transferred_from_member_id, transferred_at, created_at, active)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         household.id,
@@ -251,6 +258,7 @@ app.post('/api/admin/import', (req, res) => {
         task.due_date,
         memberIdMap.get(task.primary_member_id) || null,
         memberIdMap.get(task.secondary_member_id) || null,
+        task.recurrence_rule || null,
         memberIdMap.get(task.transferred_from_member_id) || null,
         task.transferred_at || null,
         task.created_at || nowISO(),
@@ -388,17 +396,30 @@ app.post('/api/households/:id/tasks', (req, res) => {
     return sendJson(res, 404, { error: 'Household not found.' });
   }
 
-  const { title, notes, recurrence, dueDate, primaryMemberId, secondaryMemberId } = req.body || {};
+  const {
+    title,
+    notes,
+    recurrence,
+    dueDate,
+    primaryMemberId,
+    secondaryMemberId,
+    recurrenceRule
+  } = req.body || {};
   if (!title || !recurrence || !dueDate) {
     return sendJson(res, 400, { error: 'Title, recurrence, and due date are required.' });
   }
 
   const createdAt = nowISO();
+  const storedRule =
+    recurrenceRule && typeof recurrenceRule !== 'string'
+      ? JSON.stringify(recurrenceRule)
+      : recurrenceRule || null;
+
   const info = db
     .prepare(
       `INSERT INTO tasks
-        (household_id, title, notes, recurrence, due_date, primary_member_id, secondary_member_id, transferred_from_member_id, transferred_at, created_at, active)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, 1)`
+        (household_id, title, notes, recurrence, due_date, primary_member_id, secondary_member_id, recurrence_rule, transferred_from_member_id, transferred_at, created_at, active)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, 1)`
     )
     .run(
       household.id,
@@ -408,6 +429,7 @@ app.post('/api/households/:id/tasks', (req, res) => {
       dueDate,
       primaryMemberId || null,
       secondaryMemberId || null,
+      storedRule,
       createdAt
     );
 
@@ -421,6 +443,13 @@ app.patch('/api/tasks/:id', (req, res) => {
     return sendJson(res, 404, { error: 'Task not found.' });
   }
 
+  const storedRule =
+    req.body.recurrenceRule === null
+      ? null
+      : req.body.recurrenceRule && typeof req.body.recurrenceRule !== 'string'
+        ? JSON.stringify(req.body.recurrenceRule)
+        : req.body.recurrenceRule ?? task.recurrence_rule;
+
   const updates = {
     title: req.body.title ?? task.title,
     notes: req.body.notes ?? task.notes,
@@ -428,12 +457,13 @@ app.patch('/api/tasks/:id', (req, res) => {
     due_date: req.body.dueDate ?? task.due_date,
     primary_member_id: req.body.primaryMemberId ?? task.primary_member_id,
     secondary_member_id: req.body.secondaryMemberId ?? task.secondary_member_id,
+    recurrence_rule: storedRule,
     active: typeof req.body.active === 'number' ? req.body.active : task.active
   };
 
   db.prepare(
     `UPDATE tasks
-     SET title = ?, notes = ?, recurrence = ?, due_date = ?, primary_member_id = ?, secondary_member_id = ?, active = ?
+     SET title = ?, notes = ?, recurrence = ?, due_date = ?, primary_member_id = ?, secondary_member_id = ?, recurrence_rule = ?, active = ?
      WHERE id = ?`
   ).run(
     updates.title,
@@ -442,6 +472,7 @@ app.patch('/api/tasks/:id', (req, res) => {
     updates.due_date,
     updates.primary_member_id,
     updates.secondary_member_id,
+    updates.recurrence_rule,
     updates.active,
     task.id
   );
@@ -469,7 +500,10 @@ app.post('/api/tasks/:id/complete', (req, res) => {
   if (task.recurrence === 'once') {
     db.prepare('UPDATE tasks SET active = 0 WHERE id = ?').run(task.id);
   } else {
-    const nextDate = nextDueDate(completedAt, task.recurrence, timezone);
+    const rule = parseRecurrenceRule(task.recurrence_rule);
+    const nextDate = rule
+      ? nextDueDateWithRule(task.due_date, task.recurrence, rule, timezone, completedAt)
+      : nextDueDate(task.due_date, task.recurrence, timezone, completedAt);
     db.prepare(
       'UPDATE tasks SET due_date = ?, transferred_from_member_id = NULL, transferred_at = NULL WHERE id = ?'
     ).run(nextDate, task.id);

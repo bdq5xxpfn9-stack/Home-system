@@ -7,6 +7,7 @@ export const RECURRENCE_LABELS = {
   once: 'Einmalig',
   daily: 'Täglich',
   weekly: 'Wöchentlich',
+  monthly: 'Monatlich',
   seasonal: 'Saisonal (3 Monate)',
   half_year: 'Halbjährlich (Frühling/Herbst)',
   yearly: 'Jährlich'

@@ -442,6 +442,49 @@ footer {
   margin-top: 16px;
 }
 
+.meal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.meal-card .meal-date {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.meal-votes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.meal-vote {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  border: 1px solid #c7cfe0;
+  background: #eef1f8;
+  color: #475569;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.meal-vote.yes {
+  background: #c7f3d4;
+  border-color: #5bbf7a;
+  color: #135428;
+}
+
+.meal-vote.no {
+  background: #f2d6d6;
+  border-color: #e18d8d;
+  color: #7a2a2a;
+}
+
 @media (max-width: 720px) {
   .app {
     padding: 24px 16px 80px;

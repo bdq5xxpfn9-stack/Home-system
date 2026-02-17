@@ -96,6 +96,25 @@ export function fetchLists(householdId) {
   return request(`/api/households/${householdId}/lists`);
 }
 
+export function fetchMealPlans(householdId, from, to) {
+  const params = new URLSearchParams({ from, to });
+  return request(`/api/households/${householdId}/meal-plans?${params.toString()}`);
+}
+
+export function upsertMealPlan(householdId, payload) {
+  return request(`/api/households/${householdId}/meal-plans`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
+export function setMealVote(planId, payload) {
+  return request(`/api/meal-plans/${planId}/votes`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
 export function createList(householdId, payload) {
   return request(`/api/households/${householdId}/lists`, {
     method: 'POST',

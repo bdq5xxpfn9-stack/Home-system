@@ -91,6 +91,29 @@ db.exec(`
     created_at TEXT NOT NULL,
     FOREIGN KEY (member_id) REFERENCES members(id)
   );
+
+  CREATE TABLE IF NOT EXISTS meal_plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    household_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    meal TEXT,
+    cook_member_id INTEGER,
+    created_at TEXT NOT NULL,
+    UNIQUE (household_id, date),
+    FOREIGN KEY (household_id) REFERENCES households(id),
+    FOREIGN KEY (cook_member_id) REFERENCES members(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS meal_plan_votes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    meal_plan_id INTEGER NOT NULL,
+    member_id INTEGER NOT NULL,
+    status INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    UNIQUE (meal_plan_id, member_id),
+    FOREIGN KEY (meal_plan_id) REFERENCES meal_plans(id),
+    FOREIGN KEY (member_id) REFERENCES members(id)
+  );
 `);
 
 function ensureColumn(table, column, type) {

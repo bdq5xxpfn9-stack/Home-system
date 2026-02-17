@@ -5,6 +5,7 @@ import {
   fetchMembers,
   fetchTasks,
   fetchLists,
+  fetchMealPlans,
   createTask,
   updateTask,
   completeTask,
@@ -14,6 +15,8 @@ import {
   addMember,
   deleteMember,
   resetMemberColors,
+  upsertMealPlan,
+  setMealVote,
   createList,
   createListItem,
   updateListItem,
@@ -45,6 +48,7 @@ const VIEWS = [
   { id: 'family', label: 'Familie' },
   { id: 'week', label: 'Woche' },
   { id: 'tasks', label: 'Aufgaben' },
+  { id: 'meals', label: 'Essen' },
   { id: 'lists', label: 'Listen' },
   { id: 'settings', label: 'Einstellungen' }
 ];
@@ -109,6 +113,9 @@ export default function App() {
   const [members, setMembers] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [lists, setLists] = useState([]);
+  const [mealPlans, setMealPlans] = useState([]);
+  const [mealDrafts, setMealDrafts] = useState({});
+  const [mealNotice, setMealNotice] = useState('');
   const [view, setView] = useState('today');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -135,6 +142,13 @@ export default function App() {
     if (!session) return;
     refreshAll();
   }, [session]);
+
+  useEffect(() => {
+    if (!session) return;
+    if (view === 'meals') {
+      refreshMealPlans();
+    }
+  }, [session, view]);
 
   useEffect(() => {
     if (!session) return;
@@ -193,6 +207,115 @@ export default function App() {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  function buildMealDrafts(plans, startDate) {
+    const byDate = new Map(plans.map((plan) => [plan.date, plan]));
+    const drafts = {};
+    for (let i = 0; i < 10; i += 1) {
+      const date = DateTime.fromISO(startDate, { zone: TZ }).plus({ days: i }).toISODate();
+      const plan = byDate.get(date);
+      drafts[date] = {
+        date,
+        id: plan?.id || null,
+        meal: plan?.meal || '',
+        cookMemberId: plan?.cook_member_id || '',
+        votes: plan?.votes || []
+      };
+    }
+    return drafts;
+  }
+
+  async function refreshMealPlans() {
+    if (!session) return;
+    const start = todayISO();
+    const end = DateTime.fromISO(start, { zone: TZ }).plus({ days: 9 }).toISODate();
+    try {
+      const res = await fetchMealPlans(session.householdId, start, end);
+      setMealPlans(res.plans || []);
+      setMealDrafts(buildMealDrafts(res.plans || [], start));
+    } catch (err) {
+      setMealNotice(err.message);
+    }
+  }
+
+  function updateMealDraft(date, patch) {
+    setMealDrafts((prev) => ({
+      ...prev,
+      [date]: {
+        ...prev[date],
+        ...patch
+      }
+    }));
+  }
+
+  async function handleSaveMeal(date) {
+    if (!session) return;
+    setMealNotice('');
+    const draft = mealDrafts[date];
+    if (!draft) return;
+    try {
+      const res = await upsertMealPlan(session.householdId, {
+        date,
+        meal: draft.meal,
+        cookMemberId: draft.cookMemberId || null
+      });
+      const plan = res.plan;
+      setMealPlans((prev) => {
+        const without = prev.filter((item) => item.date !== plan.date);
+        return [...without, plan].sort((a, b) => a.date.localeCompare(b.date));
+      });
+      updateMealDraft(date, {
+        id: plan.id,
+        meal: plan.meal || '',
+        cookMemberId: plan.cook_member_id || '',
+        votes: plan.votes || []
+      });
+      setMealNotice('Essensplan gespeichert.');
+    } catch (err) {
+      setMealNotice(err.message);
+    }
+  }
+
+  async function handleToggleMealVote(date, memberId) {
+    if (!session) return;
+    setMealNotice('');
+    let draft = mealDrafts[date];
+    if (!draft) return;
+
+    if (!draft.id) {
+      try {
+        const res = await upsertMealPlan(session.householdId, {
+          date,
+          meal: draft.meal,
+          cookMemberId: draft.cookMemberId || null
+        });
+        const plan = res.plan;
+        updateMealDraft(date, {
+          id: plan.id,
+          votes: plan.votes || []
+        });
+        draft = { ...draft, id: plan.id, votes: plan.votes || [] };
+      } catch (err) {
+        setMealNotice(err.message);
+        return;
+      }
+    }
+
+    const current = (draft.votes || []).find((vote) => vote.member_id === memberId);
+    const currentStatus =
+      typeof current?.status === 'number' ? Number(current.status) : null;
+    const nextStatus = currentStatus === null ? 1 : currentStatus === 1 ? 0 : null;
+
+    try {
+      const res = await setMealVote(draft.id, {
+        memberId,
+        status: nextStatus
+      });
+      updateMealDraft(date, { votes: res.votes || [] });
+    } catch (err) {
+      setMealNotice(err.message);
     }
   }
 
@@ -299,6 +422,9 @@ export default function App() {
     setMembers([]);
     setTasks([]);
     setLists([]);
+    setMealPlans([]);
+    setMealDrafts({});
+    setMealNotice('');
     setPushStatus(null);
   }
 
@@ -773,6 +899,25 @@ export default function App() {
     ['seasonal', 'half_year', 'yearly'].includes(editDraft.recurrence);
   const editShowWeekday = editMonthBased && editDraft?.recurrenceMode === 'by_weekday';
 
+  const mealStart = todayISO();
+  const mealDays = Array.from({ length: 10 }, (_, index) => {
+    const date = DateTime.fromISO(mealStart, { zone: TZ }).plus({ days: index });
+    const iso = date.toISODate();
+    const draft = mealDrafts[iso] || {
+      date: iso,
+      id: null,
+      meal: '',
+      cookMemberId: '',
+      votes: []
+    };
+    return {
+      date: iso,
+      weekday: date.setLocale(LOCALE).toFormat('cccc'),
+      shortDate: date.setLocale(LOCALE).toFormat('dd.LL'),
+      draft
+    };
+  });
+
   const onlySelf =
     session &&
     members.length === 1 &&
@@ -1081,6 +1226,73 @@ export default function App() {
                 />
               ))}
             </div>
+          </div>
+        </div>
+      )}
+
+      {view === 'meals' && (
+        <div className="section">
+          <h2>Essensplan – 10 Tage</h2>
+          <p className="notice">Abendessen planen, Zuständigkeit und Anwesenheit festhalten.</p>
+          {mealNotice && <p className="notice">{mealNotice}</p>}
+          <div className="meal-grid">
+            {mealDays.map((day) => {
+              const draft = day.draft;
+              return (
+                <div className="card meal-card" key={day.date}>
+                  <div className="row" style={{ justifyContent: 'space-between' }}>
+                    <h3>{day.weekday}</h3>
+                    <span className="meal-date">{day.shortDate}</span>
+                  </div>
+                  <div className="field">
+                    <label>Was gibt es?</label>
+                    <input
+                      value={draft.meal}
+                      onChange={(event) => updateMealDraft(day.date, { meal: event.target.value })}
+                      placeholder="z.B. Pasta, Salat"
+                    />
+                  </div>
+                  <div className="field">
+                    <label>Kocht</label>
+                    <select
+                      value={draft.cookMemberId}
+                      onChange={(event) =>
+                        updateMealDraft(day.date, { cookMemberId: event.target.value })
+                      }
+                    >
+                      <option value="">Keine</option>
+                      {members.map((member) => (
+                        <option key={member.id} value={member.id}>
+                          {member.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="row" style={{ justifyContent: 'space-between' }}>
+                    <button className="button secondary" onClick={() => handleSaveMeal(day.date)}>
+                      Speichern
+                    </button>
+                  </div>
+                  <div className="meal-votes">
+                    {members.map((member) => {
+                      const status = getMealVoteStatus(draft.votes, member.id);
+                      return (
+                        <button
+                          key={member.id}
+                          className={`meal-vote ${status || 'unknown'}`}
+                          title={`${member.name}: ${
+                            status === 'yes' ? 'Dabei' : status === 'no' ? 'Nicht dabei' : 'Unklar'
+                          }`}
+                          onClick={() => handleToggleMealVote(day.date, member.id)}
+                        >
+                          {member.name.charAt(0).toUpperCase()}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -1502,10 +1714,7 @@ function TaskRow({
   onEdit,
   showNotes
 }) {
-  const memberNames = members
-    .filter((member) => member.id === task.primary_member_id || member.id === task.secondary_member_id)
-    .map((member) => member.name)
-    .join(' & ');
+  const memberNames = getAssignedNames(task, members);
 
   const overdue = isOverdue(task.due_date);
   const dueLabel = isToday(task.due_date) ? 'Heute' : formatDateShort(task.due_date);
@@ -1626,10 +1835,9 @@ function formatRecurrenceLabel(task) {
 }
 
 function getAssignedNames(task, members) {
-  const names = members
-    .filter((member) => member.id === task.primary_member_id || member.id === task.secondary_member_id)
-    .map((member) => member.name);
-  return names.join(' & ');
+  const primary = members.find((member) => member.id === task.primary_member_id);
+  const secondary = members.find((member) => member.id === task.secondary_member_id);
+  return [primary?.name, secondary?.name].filter(Boolean).join(' & ');
 }
 
 function getGreeting() {
@@ -1643,14 +1851,20 @@ function getGreeting() {
 
 function getBubbleStyle(task, index, today) {
   const todayDate = DateTime.fromISO(today, { zone: TZ }).startOf('day');
+  const now = DateTime.now().setZone(TZ);
   const dueDate = DateTime.fromISO(task.due_date, { zone: TZ }).startOf('day');
   const diffDays = Math.floor(dueDate.diff(todayDate, 'days').days);
   const overdueDays = diffDays < 0 ? Math.abs(diffDays) : 0;
+  const lateToday = diffDays === 0 && now.hour >= 21;
+  const isOverdue = overdueDays > 0 || lateToday;
   const intensity = Math.min(1, 0.45 + overdueDays * 0.18);
   const size = 100 + intensity * 70;
   const light = 90 - intensity * 25;
   const deep = 80 - intensity * 28;
-  const hue = task.transferred_from_member_id ? 262 : 214;
+  let hue = task.transferred_from_member_id ? 262 : 214;
+  if (isOverdue) {
+    hue = 6;
+  }
   const delay = (index % 7) * 0.25;
   return {
     width: `${size}px`,
@@ -1659,4 +1873,10 @@ function getBubbleStyle(task, index, today) {
     animationDelay: `${delay}s`,
     animationDuration: `${5.5 + (index % 5)}s`
   };
+}
+
+function getMealVoteStatus(votes, memberId) {
+  const vote = (votes || []).find((item) => item.member_id === memberId);
+  if (!vote) return null;
+  return Number(vote.status) === 1 ? 'yes' : 'no';
 }

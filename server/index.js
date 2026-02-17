@@ -162,6 +162,16 @@ app.get('/api/admin/export', (req, res) => {
       'SELECT li.* FROM list_items li INNER JOIN lists l ON l.id = li.list_id WHERE l.household_id = ?'
     )
     .all(household.id);
+  const mealPlans = db
+    .prepare('SELECT * FROM meal_plans WHERE household_id = ? ORDER BY date ASC')
+    .all(household.id);
+  const mealVotes = db
+    .prepare(
+      `SELECT mv.* FROM meal_plan_votes mv
+       INNER JOIN meal_plans mp ON mp.id = mv.meal_plan_id
+       WHERE mp.household_id = ?`
+    )
+    .all(household.id);
 
   return sendJson(res, 200, {
     version: 1,
@@ -176,7 +186,9 @@ app.get('/api/admin/export', (req, res) => {
     tasks,
     task_completions: completions,
     lists,
-    list_items: listItems
+    list_items: listItems,
+    meal_plans: mealPlans,
+    meal_plan_votes: mealVotes
   });
 });
 
@@ -298,6 +310,35 @@ app.post('/api/admin/import', (req, res) => {
       typeof item.done === 'number' ? item.done : 0,
       item.created_at || nowISO(),
       item.done_at || null
+    );
+  }
+
+  const mealPlanIdMap = new Map();
+  for (const plan of payload.meal_plans || []) {
+    const info = db
+      .prepare(
+        'INSERT INTO meal_plans (household_id, date, meal, cook_member_id, created_at) VALUES (?, ?, ?, ?, ?)'
+      )
+      .run(
+        household.id,
+        plan.date,
+        plan.meal || null,
+        memberIdMap.get(plan.cook_member_id) || null,
+        plan.created_at || nowISO()
+      );
+    mealPlanIdMap.set(plan.id, info.lastInsertRowid);
+  }
+
+  for (const vote of payload.meal_plan_votes || []) {
+    const mappedPlanId = mealPlanIdMap.get(vote.meal_plan_id);
+    if (!mappedPlanId) continue;
+    db.prepare(
+      'INSERT INTO meal_plan_votes (meal_plan_id, member_id, status, created_at) VALUES (?, ?, ?, ?)'
+    ).run(
+      mappedPlanId,
+      memberIdMap.get(vote.member_id) || null,
+      typeof vote.status === 'number' ? vote.status : 0,
+      vote.created_at || nowISO()
     );
   }
 
@@ -608,6 +649,113 @@ app.delete('/api/tasks/:id', (req, res) => {
   return sendJson(res, 200, { ok: true });
 });
 
+app.get('/api/households/:id/meal-plans', (req, res) => {
+  const household = getHousehold(req.params.id);
+  if (!household) {
+    return sendJson(res, 404, { error: 'Household not found.' });
+  }
+
+  const { from, to } = req.query || {};
+  if (!from || !to) {
+    return sendJson(res, 400, { error: 'from and to dates are required.' });
+  }
+
+  const plans = db
+    .prepare(
+      'SELECT * FROM meal_plans WHERE household_id = ? AND date >= ? AND date <= ? ORDER BY date ASC'
+    )
+    .all(household.id, from, to);
+
+  const planIds = plans.map((plan) => plan.id);
+  let votes = [];
+  if (planIds.length) {
+    const placeholders = planIds.map(() => '?').join(', ');
+    votes = db
+      .prepare(`SELECT * FROM meal_plan_votes WHERE meal_plan_id IN (${placeholders})`)
+      .all(...planIds);
+  }
+
+  const votesByPlan = votes.reduce((acc, vote) => {
+    acc[vote.meal_plan_id] = acc[vote.meal_plan_id] || [];
+    acc[vote.meal_plan_id].push(vote);
+    return acc;
+  }, {});
+
+  const payload = plans.map((plan) => ({
+    ...plan,
+    votes: votesByPlan[plan.id] || []
+  }));
+
+  return sendJson(res, 200, { plans: payload });
+});
+
+app.post('/api/households/:id/meal-plans', (req, res) => {
+  const household = getHousehold(req.params.id);
+  if (!household) {
+    return sendJson(res, 404, { error: 'Household not found.' });
+  }
+
+  const { date, meal, cookMemberId } = req.body || {};
+  if (!date) {
+    return sendJson(res, 400, { error: 'Date is required.' });
+  }
+
+  const existing = db
+    .prepare('SELECT * FROM meal_plans WHERE household_id = ? AND date = ?')
+    .get(household.id, date);
+
+  if (existing) {
+    db.prepare('UPDATE meal_plans SET meal = ?, cook_member_id = ? WHERE id = ?').run(
+      meal || null,
+      cookMemberId || null,
+      existing.id
+    );
+    const updated = db.prepare('SELECT * FROM meal_plans WHERE id = ?').get(existing.id);
+    const votes = db
+      .prepare('SELECT * FROM meal_plan_votes WHERE meal_plan_id = ?')
+      .all(existing.id);
+    return sendJson(res, 200, { plan: { ...updated, votes } });
+  }
+
+  const createdAt = nowISO();
+  const info = db
+    .prepare(
+      'INSERT INTO meal_plans (household_id, date, meal, cook_member_id, created_at) VALUES (?, ?, ?, ?, ?)'
+    )
+    .run(household.id, date, meal || null, cookMemberId || null, createdAt);
+  const plan = db.prepare('SELECT * FROM meal_plans WHERE id = ?').get(info.lastInsertRowid);
+  return sendJson(res, 200, { plan: { ...plan, votes: [] } });
+});
+
+app.post('/api/meal-plans/:id/votes', (req, res) => {
+  const plan = db.prepare('SELECT * FROM meal_plans WHERE id = ?').get(req.params.id);
+  if (!plan) {
+    return sendJson(res, 404, { error: 'Meal plan not found.' });
+  }
+
+  const { memberId, status } = req.body || {};
+  if (!memberId) {
+    return sendJson(res, 400, { error: 'Member ID required.' });
+  }
+
+  const createdAt = nowISO();
+  if (status === null || typeof status === 'undefined') {
+    db.prepare('DELETE FROM meal_plan_votes WHERE meal_plan_id = ? AND member_id = ?').run(
+      plan.id,
+      memberId
+    );
+  } else {
+    db.prepare(
+      `INSERT INTO meal_plan_votes (meal_plan_id, member_id, status, created_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(meal_plan_id, member_id) DO UPDATE SET status = excluded.status`
+    ).run(plan.id, memberId, status ? 1 : 0, createdAt);
+  }
+
+  const votes = db.prepare('SELECT * FROM meal_plan_votes WHERE meal_plan_id = ?').all(plan.id);
+  return sendJson(res, 200, { votes });
+});
+
 app.get('/api/households/:id/lists', (req, res) => {
   const household = getHousehold(req.params.id);
   if (!household) {
@@ -855,9 +1003,7 @@ async function sendDailyReminders() {
         continue;
       }
 
-      const memberTasks = tasks.filter(
-        (task) => task.primary_member_id === member.id || task.secondary_member_id === member.id
-      );
+      const memberTasks = tasks.filter((task) => task.primary_member_id === member.id);
 
       if (!memberTasks.length) {
         continue;
@@ -868,13 +1014,15 @@ async function sendDailyReminders() {
           ? `Guten Morgen ${member.name}, schau dir deine Aufgabe für heute an: ${memberTasks[0].title}`
           : `Guten Morgen ${member.name}, schau dir an, was heute ansteht. Du hast ${memberTasks.length} Aufgaben.`;
 
-      await sendPushToMember(member.id, {
+      const result = await sendPushToMember(member.id, {
         title: 'Familienplan – Heute',
         body,
         data: { type: 'daily', date: today }
       });
 
-      db.prepare('UPDATE members SET last_daily_push_date = ? WHERE id = ?').run(today, member.id);
+      if (result.sent > 0) {
+        db.prepare('UPDATE members SET last_daily_push_date = ? WHERE id = ?').run(today, member.id);
+      }
     }
   }
 }
@@ -967,7 +1115,7 @@ async function sendPenaltyReminders() {
 
       const secondary = task.secondary_member_id ? getMember(task.secondary_member_id) : null;
       const penaltyTarget = secondary ? ` an ${secondary.name}` : '';
-      const body = `Aufgabe „${task.title}“ ist nicht erledigt. Du schuldest deine Strafe${penaltyTarget}.`;
+      const body = `Schäm dich! Aufgabe „${task.title}“ ist nach 21:00 nicht erledigt. Du schuldest deine Strafe${penaltyTarget}.`;
 
       await sendPushToMember(primary.id, {
         title: 'Familienplan – 21:00 Strafe',

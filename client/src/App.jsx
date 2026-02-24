@@ -134,6 +134,7 @@ export default function App() {
   const [createWeekday, setCreateWeekday] = useState('1');
   const [createMonth, setCreateMonth] = useState(String(DateTime.now().month));
   const [createDueDate, setCreateDueDate] = useState(todayISO());
+  const [transferTargetId, setTransferTargetId] = useState('');
 
   const today = todayISO();
   const week = weekRange(today);
@@ -498,8 +499,7 @@ export default function App() {
     if (!session) return;
     try {
       const res = await completeTask(taskId, {
-        completedByMemberId: session.memberId,
-        completedAt: today
+        completedByMemberId: session.memberId
       });
 
       if (res.task.active === 0) {
@@ -532,6 +532,7 @@ export default function App() {
     setIsEditing(true);
     setActiveTask(task);
     setActionNotice('');
+    setTransferTargetId('');
   }
 
   async function handleSaveEdit() {
@@ -819,7 +820,13 @@ export default function App() {
     if (!session) return;
     setActionNotice('');
     try {
-      const res = await transferTask(task.id, { fromMemberId: session.memberId });
+      const payload = {
+        fromMemberId: session.memberId
+      };
+      if (options.toMemberId) {
+        payload.toMemberId = options.toMemberId;
+      }
+      const res = await transferTask(task.id, payload);
       setTasks((prev) => prev.map((item) => (item.id === task.id ? res.task : item)));
       if (options.openModal) {
         setActiveTask(res.task);
@@ -836,6 +843,14 @@ export default function App() {
     } catch (err) {
       setActionNotice(err.message);
     }
+  }
+
+  function startTransferTask(task) {
+    setActiveTask(task);
+    setIsEditing(false);
+    setEditDraft(null);
+    setTransferTargetId(task.secondary_member_id ? String(task.secondary_member_id) : '');
+    setActionNotice('');
   }
 
   async function handleNudgeTask(task) {
@@ -1048,7 +1063,7 @@ export default function App() {
                     onComplete={handleCompleteTask}
                     onDelete={handleDeleteTask}
                     onNudge={() => handleNudgeTask(task)}
-                    onTransfer={() => handleTransferTask(task)}
+                    onTransfer={() => startTransferTask(task)}
                   />
                 ))}
               </div>
@@ -1064,7 +1079,7 @@ export default function App() {
                   onComplete={handleCompleteTask}
                   onDelete={handleDeleteTask}
                   onNudge={() => handleNudgeTask(task)}
-                  onTransfer={() => handleTransferTask(task)}
+                  onTransfer={() => startTransferTask(task)}
                 />
               ))}
             </div>
@@ -1221,6 +1236,7 @@ export default function App() {
                   members={members}
                   onComplete={handleCompleteTask}
                   onDelete={handleDeleteTask}
+                  onTransfer={() => startTransferTask(task)}
                   onEdit={() => startEditTask(task)}
                   showNotes
                 />
@@ -1268,6 +1284,11 @@ export default function App() {
                       ))}
                     </select>
                   </div>
+                  {draft.cookMemberId && (
+                    <p className="notice">
+                      Kocht: {members.find((m) => m.id === Number(draft.cookMemberId))?.name || ''}
+                    </p>
+                  )}
                   <div className="row" style={{ justifyContent: 'space-between' }}>
                     <button className="button secondary" onClick={() => handleSaveMeal(day.date)}>
                       Speichern
@@ -1476,6 +1497,7 @@ export default function App() {
             setActionNotice('');
             setIsEditing(false);
             setEditDraft(null);
+            setTransferTargetId('');
           }}
         >
           <div className="modal" onClick={(event) => event.stopPropagation()}>
@@ -1487,6 +1509,7 @@ export default function App() {
                   setActiveTask(null);
                   setIsEditing(false);
                   setEditDraft(null);
+                  setTransferTargetId('');
                 }}
               >
                 Schließen
@@ -1669,6 +1692,22 @@ export default function App() {
                   Zuständig: {getAssignedNames(activeTask, members) || 'Offen'}
                 </p>
                 {activeTask.notes && <p className="modal-notes">{activeTask.notes}</p>}
+                <div className="field">
+                  <label>Übertragen an</label>
+                  <select
+                    value={transferTargetId}
+                    onChange={(event) => setTransferTargetId(event.target.value)}
+                  >
+                    <option value="">Bitte wählen</option>
+                    {members
+                      .filter((member) => member.id !== session?.memberId)
+                      .map((member) => (
+                        <option key={member.id} value={member.id}>
+                          {member.name}
+                        </option>
+                      ))}
+                  </select>
+                </div>
                 <div className="modal-actions">
                   <button className="button" onClick={() => handleCompleteTask(activeTask.id)}>
                     Erledigt
@@ -1678,15 +1717,16 @@ export default function App() {
                   </button>
                   <button
                     className="button secondary"
-                    onClick={() => handleTransferTask(activeTask, { openModal: true })}
-                    disabled={!activeTask.secondary_member_id}
-                    title={
-                      activeTask.secondary_member_id
-                        ? 'An Zweitperson übertragen'
-                        : 'Keine Zweitperson hinterlegt'
+                    onClick={() =>
+                      handleTransferTask(activeTask, {
+                        openModal: true,
+                        toMemberId: transferTargetId ? Number(transferTargetId) : null
+                      })
                     }
+                    disabled={!transferTargetId && !activeTask.secondary_member_id}
+                    title="An eine Person übertragen"
                   >
-                    An Zweitperson übertragen
+                    Übertragen
                   </button>
                   <button className="button secondary" onClick={() => startEditTask(activeTask)}>
                     Bearbeiten
